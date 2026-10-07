@@ -21,9 +21,9 @@ async function requireUser(req: Request) {
   if (!token) throw new HttpError(401, 'Not signed in.');
   const { data, error } = await admin.auth.getUser(token);
   if (error || !data.user?.email) throw new HttpError(401, 'Session expired. Sign in again.');
-  const { data: ok } = await admin.from('allowed_emails').select('email').eq('email', data.user.email.toLowerCase()).maybeSingle();
+  const { data: ok } = await admin.from('allowed_emails').select('role').eq('email', data.user.email.toLowerCase()).maybeSingle();
   if (!ok) throw new HttpError(403, 'Your account does not have access yet.');
-  return data.user;
+  return { ...data.user, owner: ok.role === 'owner' };
 }
 
 const SYMBOL = /^[A-Za-z0-9./:\-^=]{1,24}$/;
@@ -36,7 +36,9 @@ function ttlSeconds(path: string, params: Record<string, string>) {
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   try {
-    await requireUser(req);
+    const user = await requireUser(req);
+    // Only the owner's account may spend the server's Twelve Data key
+    if (!user.owner) throw new HttpError(403, 'Add your own Twelve Data API key in Settings.');
     const { path, params = {} } = await req.json().catch(() => ({}));
 
     if (path !== 'quote' && path !== 'time_series') throw new HttpError(400, 'Unsupported request.');

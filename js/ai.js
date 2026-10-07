@@ -1,7 +1,7 @@
 // AI providers: Claude (Anthropic SDK), ChatGPT (OpenAI Responses API), DeepSeek (chat completions).
 // Calls go straight from the browser to each provider with the user's own key.
 import { store } from './store.js';
-import { hosted, cloud, callFn } from './cloud.js';
+import { cloud, callFn, serverKeys } from './cloud.js';
 
 // First model in each list is the default.
 export const PROVIDERS = {
@@ -48,7 +48,7 @@ export function modelFor(provider) {
 
 // Providers that can be used right now: server-enabled ones in shared mode, ones with a key otherwise.
 export function availableProviders() {
-  if (hosted) return Object.keys(PROVIDERS).filter((k) => cloud.info?.providers?.includes(k));
+  if (serverKeys()) return Object.keys(PROVIDERS).filter((k) => cloud.info?.providers?.includes(k));
   return Object.keys(PROVIDERS).filter((k) => store.settings.keys[k]);
 }
 
@@ -60,7 +60,7 @@ export function activeProvider() {
 
 export async function ask({ provider, system, messages, web }) {
   const { label } = PROVIDERS[provider];
-  if (hosted) {
+  if (serverKeys()) {
     const out = await callFn('ai', {
       provider, model: modelFor(provider), system, messages,
       web: web && PROVIDERS[provider].web, effort: store.settings.claudeEffort,

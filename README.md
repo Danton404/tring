@@ -54,7 +54,8 @@ When `js/config.js` has a Supabase URL and publishable key, TRING runs in shared
 
 - People sign in with Google. Only emails in the `allowed_emails` table get in.
 - Each person's assets, transactions and plans are stored in `user_state`, protected by row-level security.
-- API keys live on the server as Edge Function secrets. Users never see them and need none of their own.
+- The owner's API keys live on the server as Edge Function secrets and are used only for accounts with `role = 'owner'` in `allowed_emails`.
+- Everyone else (`role = 'member'`, the default) enters their own Twelve Data and AI keys in Settings. Those keys stay in their browser and go straight to the provider, never to the server.
 - `market` function: Twelve Data proxy with a shared cache (`market_cache`), so everyone together stays inside the free limit.
 - `ai` function: Claude / ChatGPT / Gemini / DeepSeek proxy with a per-user daily limit (`DAILY_AI_LIMIT`, default 25).
 
@@ -62,7 +63,7 @@ Supabase project: `rqmybqdyfsrnkmbvaadx` (org TRING). Google OAuth client: Googl
 
 | Task | Where |
 |---|---|
-| Give someone access | Supabase > Table Editor > `allowed_emails` > Insert row (email in lowercase) |
+| Give someone access | Supabase > Table Editor > `allowed_emails` > Insert row (email in lowercase; leave role as `member`) |
 | Add or change API keys | Supabase > Edge Functions > Secrets: `TWELVE_DATA_API_KEY`, `ANTHROPIC_API_KEY`, `ANTHROPIC_WORKSPACE_ID` (optional), `OPENAI_API_KEY`, `GEMINI_API_KEY`, `DEEPSEEK_API_KEY`, `DAILY_AI_LIMIT` |
 | Allow a new site address | Supabase > Authentication > URL Configuration (Site URL + Redirect URLs) |
 | Update server code | Paste `supabase/functions/<name>/index.ts` into Edge Functions > the function > Code, then Deploy. "Verify JWT with legacy secret" stays off; the functions check the user themselves. |

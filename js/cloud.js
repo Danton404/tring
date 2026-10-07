@@ -63,3 +63,6 @@ export async function loadInfo() {
   cloud.info = await callFn('ai', { action: 'info' });
   return cloud.info;
 }
+
+// Only the owner's account uses the server's API keys; everyone else brings their own.
+export const serverKeys = () => hosted && !!cloud.info?.owner;

@@ -41,9 +41,9 @@ async function requireUser(req: Request) {
   if (!token) throw new HttpError(401, 'Not signed in.');
   const { data, error } = await admin.auth.getUser(token);
   if (error || !data.user?.email) throw new HttpError(401, 'Session expired. Sign in again.');
-  const { data: ok } = await admin.from('allowed_emails').select('email').eq('email', data.user.email.toLowerCase()).maybeSingle();
+  const { data: ok } = await admin.from('allowed_emails').select('role').eq('email', data.user.email.toLowerCase()).maybeSingle();
   if (!ok) throw new HttpError(403, 'Your account does not have access yet.');
-  return data.user;
+  return { ...data.user, owner: ok.role === 'owner' };
 }
 
 // ---------- Providers
@@ -173,8 +173,10 @@ Deno.serve(async (req) => {
     if (body.action === 'info') {
       const { data } = await admin.from('ai_usage').select('count')
         .eq('user_id', user.id).eq('day', new Date().toISOString().slice(0, 10)).maybeSingle();
-      return json({ providers: Object.keys(KEY_NAMES).filter(keyFor), limit: LIMIT, used: data?.count || 0 });
+      return json({ owner: user.owner, providers: user.owner ? Object.keys(KEY_NAMES).filter(keyFor) : [], limit: LIMIT, used: data?.count || 0 });
     }
+    // Only the owner's account may spend the server's AI keys; others call providers with their own keys
+    if (!user.owner) throw new HttpError(403, 'Add your own AI API key in Settings.');
 
     const { provider, model, system, messages } = body;
     if (!KEY_NAMES[provider] || !keyFor(provider)) throw new HttpError(400, 'This AI provider is not enabled.');

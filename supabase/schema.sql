@@ -6,6 +6,8 @@ create table if not exists public.allowed_emails (
   note text,
   added_at timestamptz not null default now()
 );
+-- owner: uses the server's API keys. member: brings their own keys in Settings.
+alter table public.allowed_emails add column if not exists role text not null default 'member' check (role in ('owner', 'member'));
 alter table public.allowed_emails enable row level security; -- no policies: dashboard and server only
 
 create or replace function public.is_allowed()
@@ -71,3 +73,4 @@ revoke execute on function public.refund_ai_usage(uuid) from public, anon, authe
 
 -- The owner: put your own Google email here before running.
 insert into public.allowed_emails (email, note) values ('owner@example.com', 'owner') on conflict do nothing;
+update public.allowed_emails set role = 'owner' where note = 'owner';

@@ -1,5 +1,5 @@
 import { store, uid, pull, push, syncEnabled, clearLocal } from './store.js';
-import { hosted, cloud, initAuth, signInWithGoogle, signOut, loadInfo } from './cloud.js';
+import { hosted, cloud, initAuth, signInWithGoogle, signOut, loadInfo, serverKeys } from './cloud.js';
 import * as market from './market.js';
 import { holdings, planSummary, indicators } from './calc.js';
 import { ask, PROVIDERS, modelFor, availableProviders, activeProvider } from './ai.js';
@@ -115,7 +115,7 @@ function assetView(a) {
 }
 
 function renderMarkets(el) {
-  const needsKey = !hosted && !store.settings.twelveKey && store.state.assets.some((a) => a.source === 'twelve');
+  const needsKey = !serverKeys() && !store.settings.twelveKey && store.state.assets.some((a) => a.source === 'twelve');
   let rows = store.state.assets.map(assetView);
   const sorters = {
     closest: (x, y) => (x.toAth ?? Infinity) - (y.toAth ?? Infinity),
@@ -649,7 +649,7 @@ function activeLine() {
   if (!k) return '';
   const p = PROVIDERS[k];
   const model = p.models.find((m) => m.id === modelFor(k))?.label || modelFor(k);
-  const left = hosted && cloud.info ? ` · ${Math.max(0, cloud.info.limit - cloud.info.used)} of ${cloud.info.limit} requests left today` : '';
+  const left = serverKeys() ? ` · ${Math.max(0, cloud.info.limit - cloud.info.used)} of ${cloud.info.limit} requests left today` : '';
   return `<p class="active-ai small"><span class="live-dot" aria-hidden="true"></span>Active: <strong>${p.label}</strong> · ${esc(model)}${left} · <a href="#settings">Change</a></p>`;
 }
 
@@ -668,7 +668,7 @@ function renderAI(el) {
           ${activeLine()}</div>
         <label class="check"><input type="checkbox" id="web-toggle"${st.web && p.web ? ' checked' : ''}${p.web ? '' : ' disabled'}>
           <span>Search the web for news${p.web ? '' : ` (not available with ${p.label})`}</span></label>`
-      : `<div class="banner">${icon('alert')}<div><strong>No AI connected</strong><p>${hosted ? 'The owner has not enabled an AI provider yet.' : 'Add an API key for Claude, ChatGPT, Gemini or DeepSeek in Settings.'}</p></div>${hosted ? '' : '<a class="btn" href="#settings">Open Settings</a>'}</div>`}
+      : `<div class="banner">${icon('alert')}<div><strong>No AI connected</strong><p>${serverKeys() ? 'No AI provider is enabled on the server yet.' : 'Add your own API key for Claude, ChatGPT, Gemini or DeepSeek in Settings.'}</p></div>${serverKeys() ? '' : '<a class="btn" href="#settings">Open Settings</a>'}</div>`}
       <div class="quick">
         <div class="field inline grow"><label for="ai-asset">Asset</label><select id="ai-asset">${assetOptions(ui.aiAsset || store.state.assets[0]?.id)}</select></div>
         <button class="btn" type="button" data-act="ai-analyze"${off}>${icon('sparkles', 18)}Analyze asset</button>
@@ -727,7 +727,7 @@ function setBusy(busy) {
 async function sendChat(content, label) {
   if (ui.busy) return;
   const provider = activeProvider();
-  if (!provider) return toast(hosted ? 'No AI provider is enabled yet.' : 'Add an AI API key in Settings first.', { kind: 'error' });
+  if (!provider) return toast(serverKeys() ? 'No AI provider is enabled yet.' : 'Add an AI API key in Settings first.', { kind: 'error' });
   chat.push({ role: 'user', content, label, ts: Date.now() });
   setBusy(true);
   renderChat();
@@ -823,11 +823,11 @@ function renderSettings(el) {
     return `<div class="prov">
       <div class="prov-head"><h3>${p.label}</h3>${status}</div>
       <div class="row-2">
-        ${hosted ? '' : keyField(`s-key-${k}`, 'API key', st.keys[k], `<a href="${p.keyUrl}" target="_blank" rel="noopener">Get a key</a>`)}
+        ${serverKeys() ? '' : keyField(`s-key-${k}`, 'API key', st.keys[k], `<a href="${p.keyUrl}" target="_blank" rel="noopener">Get a key</a>`)}
         <div class="field"><label for="s-model-${k}">Model</label><select id="s-model-${k}">${p.models.map((m) => `<option value="${m.id}"${m.id === modelFor(k) ? ' selected' : ''}>${esc(m.label)}</option>`).join('')}</select></div>
         ${k === 'claude' ? `<div class="field"><label for="s-claude-effort">Effort</label><select id="s-claude-effort">${['low', 'medium', 'high', 'xhigh', 'max'].map((e) => `<option value="${e}"${e === st.claudeEffort ? ' selected' : ''}>${e[0].toUpperCase() + e.slice(1)}${e === 'medium' ? ' (recommended)' : ''}</option>`).join('')}</select>
           <p class="hint">Higher effort thinks longer and costs more. Not used by Haiku 4.5.</p></div>` : ''}
-        ${k === 'claude' && !hosted ? `<div class="field"><label for="s-claude-ws">Workspace ID (optional)</label>
+        ${k === 'claude' && !serverKeys() ? `<div class="field"><label for="s-claude-ws">Workspace ID (optional)</label>
           <input id="s-claude-ws" autocomplete="off" spellcheck="false" value="${esc(st.claudeWorkspace)}" placeholder="wrkspc_...">
           <p class="hint">Only if Claude says the key is not tied to a workspace.</p></div>` : ''}
       </div></div>`;
@@ -844,42 +844,39 @@ function renderSettings(el) {
     </section>
     <p class="footnote">TRING v1 · Market data from Twelve Data and CoinGecko. AI output can be wrong; check it before acting on it.</p>`;
 
-  if (hosted) {
-    const info = cloud.info;
-    el.innerHTML = `
-      <section class="card form">
-        <h2>Account</h2>
-        <p>Signed in as <strong>${esc(cloud.user?.email)}</strong></p>
-        ${info ? `<p class="small muted">AI requests today: ${info.used} of ${info.limit}. Resets at midnight UTC.</p>` : ''}
-        <p class="small" id="sync-detail">${esc(syncDetail())}</p>
-        <div class="btn-row"><button class="btn" type="button" data-act="sign-out">Sign out</button></div>
-      </section>
-      <section class="card form">
-        <h2>AI</h2>
-        ${available.length ? available.map(providerBlock).join('') : '<p class="muted">No AI provider is enabled on the server yet.</p>'}
-      </section>
-      ${dataCard}`;
-  } else {
-    el.innerHTML = `
-      <section class="card form">
-        <h2>Market data</h2>
-        ${keyField('s-twelve', 'Twelve Data API key', st.twelveKey, 'Free key at <a href="https://twelvedata.com/pricing" target="_blank" rel="noopener">twelvedata.com</a>. Covers stocks, ETFs, indices, gold and FX (8 requests per minute on the free plan). Crypto uses CoinGecko and needs no key.')}
-      </section>
-      <section class="card form">
-        <h2>AI providers</h2>
-        <p class="small muted">Keys stay on this device and are sent only to their own provider. They are not synced. The provider marked Active answers in the AI tab.</p>
-        ${Object.keys(PROVIDERS).map(providerBlock).join('')}
-      </section>
-      <section class="card form">
-        <h2>Cloud sync</h2>
-        <p class="small muted">Syncs assets, transactions, plans and snapshots through your own Google Apps Script. Setup steps are in README.md.</p>
-        <div class="field"><label for="s-sync-url">Web app URL</label><input id="s-sync-url" type="url" inputmode="url" autocomplete="off" value="${esc(st.syncUrl)}" placeholder="https://script.google.com/macros/s/.../exec"></div>
-        ${keyField('s-sync-token', 'Sync token', st.syncToken, '')}
-        <p class="small" id="sync-detail">${esc(syncDetail())}</p>
-        <div class="btn-row"><button class="btn" type="button" data-act="sync-now">${icon('cloud', 18)}Sync now</button></div>
-      </section>
-      ${dataCard}`;
-  }
+  const own = serverKeys();
+  const info = cloud.info;
+  const accountCard = hosted ? `
+    <section class="card form">
+      <h2>Account</h2>
+      <p>Signed in as <strong>${esc(cloud.user?.email)}</strong></p>
+      ${own && info ? `<p class="small muted">Using the owner's server keys. AI requests today: ${info.used} of ${info.limit}. Resets at midnight UTC.</p>` : ''}
+      <p class="small" id="sync-detail">${esc(syncDetail())}</p>
+      <div class="btn-row"><button class="btn" type="button" data-act="sign-out">Sign out</button></div>
+    </section>` : '';
+  const marketCard = own ? '' : `
+    <section class="card form">
+      <h2>Market data</h2>
+      ${keyField('s-twelve', 'Twelve Data API key', st.twelveKey, 'Needed for stocks, ETFs, indices, gold and FX. Free key at <a href="https://twelvedata.com/pricing" target="_blank" rel="noopener">twelvedata.com</a> (8 requests per minute). Crypto uses CoinGecko and needs no key.')}
+    </section>`;
+  const aiCard = `
+    <section class="card form">
+      <h2>${own ? 'AI' : 'AI providers'}</h2>
+      ${own
+        ? (available.length ? available.map(providerBlock).join('') : '<p class="muted">No AI provider is enabled on the server yet.</p>')
+        : `<p class="small muted">Use your own API keys. They stay on this device and are sent only to their own provider, never to TRING's server or other users. Add at least one; the provider marked Active answers in the AI tab.</p>
+           ${Object.keys(PROVIDERS).map(providerBlock).join('')}`}
+    </section>`;
+  const syncCard = hosted ? '' : `
+    <section class="card form">
+      <h2>Cloud sync</h2>
+      <p class="small muted">Syncs assets, transactions, plans and snapshots through your own Google Apps Script. Setup steps are in README.md.</p>
+      <div class="field"><label for="s-sync-url">Web app URL</label><input id="s-sync-url" type="url" inputmode="url" autocomplete="off" value="${esc(st.syncUrl)}" placeholder="https://script.google.com/macros/s/.../exec"></div>
+      ${keyField('s-sync-token', 'Sync token', st.syncToken, '')}
+      <p class="small" id="sync-detail">${esc(syncDetail())}</p>
+      <div class="btn-row"><button class="btn" type="button" data-act="sync-now">${icon('cloud', 18)}Sync now</button></div>
+    </section>`;
+  el.innerHTML = accountCard + marketCard + aiCard + syncCard + dataCard;
 
   const bind = (id, fn) => $(`#${id}`, el)?.addEventListener('change', (e) => { fn(e.target.value.trim()); toast('Saved'); });
   bind('s-twelve', (v) => { store.setSettings({ twelveKey: v }); refresh(); });
@@ -1030,9 +1027,8 @@ async function boot() {
     }
     if (!cloud.user) return showLogin();
     if (!cloud.allowed) return showNoAccess();
-    loadInfo()
-      .then(() => { if (ui.tab === 'ai' || ui.tab === 'settings') render(); })
-      .catch((e) => toast(`AI unavailable: ${e.message}`, { kind: 'error' }));
+    // Decides whether this account uses the server keys (owner) or its own
+    try { await loadInfo(); } catch { cloud.info = null; }
   }
 
   buildNav();
