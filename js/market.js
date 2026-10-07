@@ -1,6 +1,6 @@
 // Market data: Twelve Data (stocks, ETFs, indices, gold, FX) and CoinGecko (crypto, no key).
 import { store } from './store.js';
-import { callFn, serverKeys } from './cloud.js';
+import { hosted, callFn } from './cloud.js';
 
 const CACHE_KEY = 'tring.market.v1';
 const TTL = { quote: 5 * 60e3, ath: 12 * 3600e3, series: 6 * 3600e3 };
@@ -37,8 +37,8 @@ async function twelveSlot() {
 }
 
 async function twelve(path, params) {
-  // Owner in shared mode: the server holds the key and caches results
-  if (serverKeys()) return callFn('market', { path, params });
+  // Shared mode: the server's Twelve Data key serves every invited user, with a shared cache
+  if (hosted) return callFn('market', { path, params });
   const key = store.settings.twelveKey;
   if (!key) throw new Error('Add a Twelve Data API key in Settings.');
   await twelveSlot();

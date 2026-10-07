@@ -115,7 +115,7 @@ function assetView(a) {
 }
 
 function renderMarkets(el) {
-  const needsKey = !serverKeys() && !store.settings.twelveKey && store.state.assets.some((a) => a.source === 'twelve');
+  const needsKey = !hosted && !store.settings.twelveKey && store.state.assets.some((a) => a.source === 'twelve');
   let rows = store.state.assets.map(assetView);
   const sorters = {
     closest: (x, y) => (x.toAth ?? Infinity) - (y.toAth ?? Infinity),
@@ -854,7 +854,7 @@ function renderSettings(el) {
       <p class="small" id="sync-detail">${esc(syncDetail())}</p>
       <div class="btn-row"><button class="btn" type="button" data-act="sign-out">Sign out</button></div>
     </section>` : '';
-  const marketCard = own ? '' : `
+  const marketCard = hosted ? '' : `
     <section class="card form">
       <h2>Market data</h2>
       ${keyField('s-twelve', 'Twelve Data API key', st.twelveKey, 'Needed for stocks, ETFs, indices, gold and FX. Free key at <a href="https://twelvedata.com/pricing" target="_blank" rel="noopener">twelvedata.com</a> (8 requests per minute). Crypto uses CoinGecko and needs no key.')}

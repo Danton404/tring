@@ -36,9 +36,8 @@ function ttlSeconds(path: string, params: Record<string, string>) {
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   try {
-    const user = await requireUser(req);
-    // Only the owner's account may spend the server's Twelve Data key
-    if (!user.owner) throw new HttpError(403, 'Add your own Twelve Data API key in Settings.');
+    // The Twelve Data key is shared by every invited user (results are cached for everyone)
+    await requireUser(req);
     const { path, params = {} } = await req.json().catch(() => ({}));
 
     if (path !== 'quote' && path !== 'time_series') throw new HttpError(400, 'Unsupported request.');

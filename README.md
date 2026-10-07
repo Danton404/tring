@@ -55,7 +55,8 @@ When `js/config.js` has a Supabase URL and publishable key, TRING runs in shared
 - People sign in with Google. Only emails in the `allowed_emails` table get in.
 - Each person's assets, transactions and plans are stored in `user_state`, protected by row-level security.
 - The owner's API keys live on the server as Edge Function secrets and are used only for accounts with `role = 'owner'` in `allowed_emails`.
-- Everyone else (`role = 'member'`, the default) enters their own Twelve Data and AI keys in Settings. Those keys stay in their browser and go straight to the provider, never to the server.
+- Market data (Twelve Data) uses the server key for every invited user, with a shared cache.
+- Everyone else (`role = 'member'`, the default) enters their own AI keys in Settings. Those keys stay in their browser and go straight to the provider, never to the server.
 - `market` function: Twelve Data proxy with a shared cache (`market_cache`), so everyone together stays inside the free limit.
 - `ai` function: Claude / ChatGPT / Gemini / DeepSeek proxy with a per-user daily limit (`DAILY_AI_LIMIT`, default 25).
 
