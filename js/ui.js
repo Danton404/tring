@@ -21,9 +21,10 @@ export function fmtMoney(n, currency = 'USD') {
   const s = moneyFormatter(a >= 1 || a === 0 ? 2 : 6, currency).format(a);
   return n < 0 ? MINUS + s : s;
 }
+// Gains and losses always show cents, never the extra precision used for sub-1 prices
 export function fmtSignedMoney(n, currency = 'USD') {
   if (n == null || !isFinite(n)) return '-';
-  return (n > 0 ? '+' : n < 0 ? MINUS : '') + fmtMoney(Math.abs(n), currency);
+  return (n > 0 ? '+' : n < 0 ? MINUS : '') + moneyFormatter(2, currency).format(Math.abs(n));
 }
 export function fmtPct(n, { signed = true, digits = 2 } = {}) {
   if (n == null || !isFinite(n)) return '-';

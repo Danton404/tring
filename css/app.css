@@ -338,3 +338,23 @@ dialog.sheet::backdrop { background: oklch(0.1 0 0 / 0.45); }
 .imp-summary:empty { display: none; }
 .imp-card { display: flex; flex-direction: column; gap: 8px; padding: 16px; box-shadow: none; background: var(--surface-2); }
 p.warn { color: var(--warning); }
+
+/* ---------- Portfolio: AUM chart, sortable holdings, transactions */
+.perf { display: flex; flex-direction: column; gap: 12px; }
+.perf-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.perf-head > div:first-child { display: flex; flex-direction: column; gap: 2px; }
+.aum { font-size: 34px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15; }
+.perf-gain { margin-bottom: 4px; }
+.perf-kpis { padding-top: 16px; border-top: 1px solid var(--border); margin-top: 4px; }
+.chart-wrap { position: relative; touch-action: pan-y; cursor: crosshair; }
+.chart-wrap .line-chart { height: 220px; }
+.chart-cursor { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--muted); opacity: 0.6; pointer-events: none; }
+.legend-list.cols { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px 16px; }
+.th-sort { border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; min-height: 32px; white-space: nowrap; }
+.th-sort:hover, .th-sort.active { color: var(--text); }
+th.r .th-sort { text-align: right; }
+.tx-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.tx-head h2 { margin: 0; }
+.tx-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin: 16px 0 8px; }
+.pager { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 12px; }
+.chip.split { background: color-mix(in oklch, var(--accent) 15%, transparent); color: var(--accent); }

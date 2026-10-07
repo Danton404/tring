@@ -27,13 +27,13 @@ async function requireUser(req: Request) {
 }
 
 const SYMBOL = /^[A-Za-z0-9./:\-^=]{1,24}$/;
-const RANGES = ['5d', '1y', 'max'];
-const INTERVALS = ['1d', '1mo'];
+const RANGES = ['5d', '1y', '5y', 'max'];
+const INTERVALS = ['1d', '1wk', '1mo'];
 
 function ttlSeconds(path: string, params: Record<string, string>) {
   if (path === 'quote') return 15 * 60;
   if (path === 'yahoo_search') return 30 * 86400;
-  if (path === 'yahoo_chart') return params.range === '5d' ? 15 * 60 : params.range === 'max' ? 12 * 3600 : 6 * 3600;
+  if (path === 'yahoo_chart') return params.range === '5d' ? 15 * 60 : params.range === '1y' ? 6 * 3600 : 12 * 3600;
   return params.interval === '1month' ? 12 * 3600 : 6 * 3600;
 }
 

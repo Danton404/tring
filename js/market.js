@@ -125,10 +125,10 @@ const EUR_SUFFIXES = ['.DE', '.AS', '.PA', '.MI', '.F', '.BR', '.MC', '.VI', '.L
 
 // Finds a price source for an ISIN. US listings use Twelve Data (free); everything else uses a
 // Yahoo EUR listing, checked against a recent EUR trade price so we never pick the wrong instrument.
-export async function resolveIsin({ isin, tickers, refPriceEur }) {
+export async function resolveIsin({ isin, tickers, refPriceEur, yahooOnly = false }) {
   const { quotes = [] } = await yahoo('yahoo_search', { q: isin });
   const us = quotes.find((q) => US_EXCHANGES.has(q.exchange) && !q.symbol.includes('.'));
-  if (us) return { source: 'twelve', symbol: us.symbol, currency: 'USD' };
+  if (us) return yahooOnly ? { source: 'yahoo', symbol: us.symbol, yahoo: us.symbol, currency: 'USD' } : { source: 'twelve', symbol: us.symbol, currency: 'USD' };
 
   const plausible = (p) => !refPriceEur || (p > refPriceEur * 0.5 && p < refPriceEur * 2);
   const candidates = [
@@ -153,6 +153,17 @@ export async function resolveIsin({ isin, tickers, refPriceEur }) {
     } catch { /* try the next listing */ }
   }
   return null;
+}
+
+// Weekly closes for the portfolio history chart: { ccy, points: [{ date, v }] }
+export async function weeklyHistory(symbol) {
+  const { meta, points } = await yahooChart(symbol, '5y', '1wk');
+  // London quotes in pence
+  const pence = meta.currency === 'GBp' || meta.currency === 'GBX';
+  return {
+    ccy: pence ? 'GBP' : meta.currency,
+    points: points.filter((p) => p.close).map((p) => ({ date: new Date(p.t * 1000).toISOString().slice(0, 10), v: pence ? p.close / 100 : p.close })),
+  };
 }
 
 // ---------- FX (Twelve Data forex is free)

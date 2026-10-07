@@ -3,6 +3,7 @@ import { hosted, cloud, initAuth, signInWithGoogle, signOut, loadInfo, serverKey
 import * as market from './market.js';
 import { holdings, planSummary, indicators } from './calc.js';
 import { parseCsv, isT212, summarize, buildTransactions } from './importer.js';
+import { portfolioHistory } from './history.js';
 import { ask, PROVIDERS, modelFor, availableProviders, activeProvider } from './ai.js';
 import {
   $, $$, esc, icon, fmtMoney, fmtSignedMoney, fmtPct, fmtNum, fmtDate, todayISO, tone,
@@ -86,6 +87,8 @@ async function refresh(force = false) {
 }
 
 function onMarket() {
+  // Don't re-render while the user is typing in the transaction search
+  if (ui.tab === 'portfolio' && document.activeElement?.id === 'tx-q') return;
   if (ui.tab === 'markets' || ui.tab === 'portfolio') render();
   else if (ui.tab === 'plan') updatePlanResults();
 }
@@ -290,6 +293,32 @@ function removeAsset(id) {
 // Portfolio
 // =====================================================================
 
+// ---------- Portfolio view state (not synced)
+
+const TX_PAGE = 15;
+const port = { range: '1y', sort: { key: 'value', dir: -1 }, txOpen: false, page: 1, q: '', asset: '', type: '', txSort: 'new' };
+const perf = { promise: null, points: null, error: null };
+
+function loadPerf() {
+  const { transactions, assets } = store.state;
+  const p = portfolioHistory({
+    transactions, assets, base: base(), livePrice: priceOf,
+    // Remember history symbols found for closed holdings so they're looked up once
+    remember: (id, patch) => store.update((s) => { const a = s.assets.find((x) => x.id === id); if (a) Object.assign(a, patch); }, { silent: true }),
+  });
+  if (p === perf.promise) return;
+  perf.promise = p;
+  perf.points = null;
+  perf.error = null;
+  p.then((pts) => { if (perf.promise === p) { perf.points = pts; if (ui.tab === 'portfolio') renderPerf(); } })
+    .catch((e) => { if (perf.promise === p) { perf.error = e.message; if (ui.tab === 'portfolio') renderPerf(); } });
+}
+
+const toAthPct = (id) => {
+  const q = market.quote(id)?.price, at = market.ath(id);
+  return q && at?.ath && !at.partial ? Math.max(0, (at.ath / q - 1) * 100) : null;
+};
+
 function renderPortfolio(el) {
   const { state } = store;
   if (!state.transactions.length) {
@@ -303,57 +332,183 @@ function renderPortfolio(el) {
   const kpi = (label, value, sub = '', cls = '') =>
     `<div class="kpi"><span class="label">${label}</span><strong class="num ${cls}">${value}</strong>${sub ? `<span class="small num ${cls}">${sub}</span>` : ''}</div>`;
 
-  const snaps = state.snapshots;
-  const chart = snaps.length >= 2
-    ? `<div class="legend"><span><i style="background:var(--accent)"></i>Value</span><span><i class="dashed"></i>Invested</span></div>
-       ${lineChart([
-         { values: snaps.map((s) => s.value), color: 'var(--accent)', fill: true },
-         { values: snaps.map((s) => s.invested), color: 'var(--muted)', dash: true },
-       ], { label: 'Portfolio value versus invested capital over time' })}
-       <div class="axis small muted num"><span>${fmtDate(snaps[0].date)}</span><span>${fmtDate(snaps[snaps.length - 1].date)}</span></div>`
-    : `<p class="muted small">The chart fills in as TRING records one snapshot per day when prices load. Check back tomorrow.</p>`;
-
   const segs = open.filter((r) => r.value > 0).map((r) => ({ label: assetName(r.assetId), value: r.value, color: assetColor(r.assetId) }));
   const totalVal = segs.reduce((s, x) => s + x.value, 0);
 
+  // Holdings, sortable by any column
+  const sortVal = {
+    name: (r) => assetName(r.assetId).toLowerCase(),
+    qty: (r) => r.qty, avg: (r) => r.avg, price: (r) => r.price ?? -Infinity, value: (r) => r.value ?? -Infinity,
+    pl: (r) => r.plPct ?? -Infinity, toAth: (r) => toAthPct(r.assetId) ?? Infinity, atAth: (r) => r.valueAtAth ?? -Infinity,
+  };
+  const { key, dir } = port.sort;
+  const sorted = [...open].sort((x, y) => {
+    const a = sortVal[key](x), b = sortVal[key](y);
+    return (a < b ? -1 : a > b ? 1 : 0) * dir;
+  });
+  const th = (k, label, right = true) => {
+    const active = key === k;
+    return `<th class="${right ? 'r' : ''}"${active ? ` aria-sort="${dir > 0 ? 'ascending' : 'descending'}"` : ''}><button type="button" class="th-sort${active ? ' active' : ''}" data-act="hold-sort" data-key="${k}">${label}${active ? `<span aria-hidden="true">${dir > 0 ? ' ↑' : ' ↓'}</span>` : ''}</button></th>`;
+  };
+
   el.innerHTML = `
     <div class="toolbar end"><div class="btn-row"><button class="btn" type="button" data-act="import-t212">${icon('upload')}Import from Trading 212</button><button class="btn primary" type="button" data-act="add-tx">${icon('plus')}Log transaction</button></div></div>
-    <section class="kpis card">
-      ${kpi('Market value', money(totals.value), totals.unpriced ? `${totals.unpriced} holding${totals.unpriced === 1 ? '' : 's'} not priced yet` : '')}
-      ${kpi('Invested (cost basis)', money(totals.totalCost), `${money(totals.deposited)} total bought`)}
-      ${kpi('Unrealized P/L', smoney(totals.pl), fmtPct(totals.plPct), tone(totals.pl))}
-      ${kpi('Realized P/L', smoney(totals.realized), '', tone(totals.realized))}
-      ${kpi('Value if all at ATH', money(totals.valueAtAth), toAthTotal != null ? `${fmtPct(toAthTotal)} from here` : '')}
+    <section class="card perf">
+      <div class="perf-head">
+        <div>
+          <span class="label">Assets under management</span>
+          <strong class="aum num">${money(totals.value)}</strong>
+          <span class="small num ${tone(totals.pl)}">${smoney(totals.pl)} (${fmtPct(totals.plPct)}) unrealized${totals.unpriced ? ` · ${totals.unpriced} holding${totals.unpriced === 1 ? '' : 's'} not priced yet` : ''}</span>
+        </div>
+        <div class="seg" role="radiogroup" aria-label="Chart range">${[['3m', '3M'], ['6m', '6M'], ['1y', '1Y'], ['all', 'All']].map(([v, l]) =>
+          `<label><input type="radio" name="perf-range" value="${v}"${port.range === v ? ' checked' : ''}><span>${l}</span></label>`).join('')}</div>
+      </div>
+      <div id="perf-body"></div>
+      <div class="kpis perf-kpis">
+        ${kpi('Invested (cost basis)', money(totals.totalCost), `${money(totals.deposited)} total bought`)}
+        ${kpi('Unrealized P/L', smoney(totals.pl), fmtPct(totals.plPct), tone(totals.pl))}
+        ${kpi('Realized P/L', smoney(totals.realized), '', tone(totals.realized))}
+        ${kpi('Value if all at ATH', money(totals.valueAtAth), toAthTotal != null ? `${fmtPct(toAthTotal)} from here` : '')}
+      </div>
     </section>
-    <div class="two-col">
-      <section class="card"><h2>Performance</h2>${chart}</section>
-      <section class="card"><h2>Allocation</h2>
-        ${segs.length ? `<div class="alloc">${donut(segs, { label: 'Portfolio allocation by market value', center: `${segs.length} asset${segs.length === 1 ? "" : "s"}` })}
-          <ul class="legend-list">${segs.map((s) => `<li><i style="background:${s.color}"></i><span>${esc(s.label)}</span><span class="num">${fmtPct((s.value / totalVal) * 100, { signed: false, digits: 1 })}</span></li>`).join('')}</ul></div>`
-          : '<p class="muted small">Waiting for prices.</p>'}
-      </section>
-    </div>
+    <section class="card"><h2>Allocation</h2>
+      ${segs.length ? `<div class="alloc">${donut(segs, { label: 'Portfolio allocation by market value', center: `${segs.length} asset${segs.length === 1 ? '' : 's'}` })}
+        <ul class="legend-list cols">${segs.sort((x, y) => y.value - x.value).map((s) => `<li><i style="background:${s.color}"></i><span>${esc(s.label)}</span><span class="num">${fmtPct((s.value / totalVal) * 100, { signed: false, digits: 1 })}</span></li>`).join('')}</ul></div>`
+        : '<p class="muted small">Waiting for prices.</p>'}
+    </section>
     <section class="card"><h2>Holdings</h2>
-      ${open.length ? `<div class="table-wrap"><table>
-        <thead><tr><th>Asset</th><th class="r">Qty</th><th class="r">Avg cost</th><th class="r">Price</th><th class="r">Value</th><th class="r">P/L</th><th class="r">At ATH</th></tr></thead>
-        <tbody>${open.map((r) => `<tr>
+      ${open.length ? `<div class="table-wrap"><table class="holdings">
+        <thead><tr>${th('name', 'Asset', false)}${th('qty', 'Qty')}${th('avg', 'Avg cost')}${th('price', 'Price')}${th('value', 'Value')}${th('pl', 'P/L')}${th('toAth', 'To ATH')}${th('atAth', 'At ATH')}</tr></thead>
+        <tbody>${sorted.map((r) => {
+          const ta = toAthPct(r.assetId);
+          return `<tr>
           <td><span class="dot" style="background:${assetColor(r.assetId)}"></span>${esc(assetName(r.assetId))}</td>
-          <td class="r num">${fmtNum(r.qty)}</td><td class="r num">${money(r.avg)}</td><td class="r num">${money(r.price)}</td>
+          <td class="r num">${fmtNum(r.qty, 4)}</td><td class="r num">${money(r.avg)}</td><td class="r num">${money(r.price)}</td>
           <td class="r num">${money(r.value)}</td>
           <td class="r num ${tone(r.pl)}">${smoney(r.pl)}<br><span class="small">${fmtPct(r.plPct)}</span></td>
-          <td class="r num">${money(r.valueAtAth)}</td></tr>`).join('')}</tbody></table></div>`
+          <td class="r num">${ta == null ? '-' : ta < 0.01 ? 'At ATH' : fmtPct(ta)}</td>
+          <td class="r num">${money(r.valueAtAth)}</td></tr>`;
+        }).join('')}</tbody></table></div>
+        <p class="small muted">To ATH is the gain each holding needs to get back to its all-time high.</p>`
         : '<p class="muted small">No open positions.</p>'}
       ${rows.some((r) => r.qty === 0 && r.realized) ? `<p class="small muted">Closed positions are included in realized P/L.</p>` : ''}
     </section>
-    <section class="card"><h2>Transactions</h2>
-      <ul class="tx-list">${[...state.transactions].sort((a, b) => b.date.localeCompare(a.date)).map((t) => `
-        <li data-id="${t.id}">
-          <span class="chip ${t.type}">${t.type === 'buy' ? 'Buy' : 'Sell'}</span>
-          <div class="tx-main"><strong>${esc(assetName(t.assetId))}</strong><span class="small muted num">${fmtDate(t.date)} · ${fmtNum(t.qty)} @ ${money(t.price)}${t.note ? ` · ${esc(t.note)}` : ''}</span></div>
-          <span class="num">${money(t.qty * t.price + (t.type === 'buy' ? 1 : -1) * (+t.fee || 0))}</span>
-          <button class="icon-btn" type="button" data-act="del-tx" aria-label="Delete transaction">${icon('trash', 18)}</button>
-        </li>`).join('')}</ul>
-    </section>`;
+    <section class="card" id="tx-section"></section>`;
+
+  $$('[name=perf-range]', el).forEach((r) => (r.onchange = () => { port.range = r.value; renderPerf(); }));
+  loadPerf();
+  renderPerf();
+  renderTx();
+}
+
+function renderPerf() {
+  const box = $('#perf-body');
+  if (!box) return;
+  if (perf.error) {
+    box.innerHTML = `<div class="card-error" role="alert"><p>Couldn't rebuild the history chart: ${esc(perf.error)}</p><button class="btn small" type="button" data-act="perf-retry">${icon('refresh', 16)}Retry</button></div>`;
+    return;
+  }
+  if (!perf.points) {
+    box.innerHTML = `<div class="skeleton" style="height:200px"></div><p class="small muted">Rebuilding your history from past prices. The first time takes up to a minute.</p>`;
+    return;
+  }
+  const days = { '3m': 91, '6m': 182, '1y': 365 }[port.range];
+  const from = days ? new Date(Date.now() - days * 864e5).toISOString().slice(0, 10) : '';
+  const pts = perf.points.filter((p) => p.date >= from);
+  if (pts.length < 2) {
+    box.innerHTML = `<p class="muted small">Not enough history in this range yet.</p>`;
+    return;
+  }
+  const first = pts[0], last = pts[pts.length - 1];
+  // Market gain over the range: change in value, minus money added, plus profits taken by selling
+  const gain = (last.value - first.value) - (last.invested - first.invested) + (last.realized - first.realized);
+  const basis = first.value + Math.max(0, last.invested - first.invested);
+  const label = { '3m': 'the last 3 months', '6m': 'the last 6 months', '1y': 'the last year', all: 'all time' }[port.range];
+  box.innerHTML = `
+    <p class="small num perf-gain"><strong class="${tone(gain)}">${smoney(gain)}${basis > 0 ? ` (${fmtPct((gain / basis) * 100)})` : ''}</strong> <span class="muted">gain over ${label}, realized and unrealized, excluding money added</span></p>
+    <div class="legend"><span><i style="background:var(--accent)"></i>Value</span><span><i class="dashed"></i>Invested</span></div>
+    <div class="chart-wrap">${lineChart([
+      { values: pts.map((p) => p.value), color: 'var(--accent)', fill: true },
+      { values: pts.map((p) => p.invested), color: 'var(--muted)', dash: true },
+    ], { height: 220, label: `Portfolio value versus invested capital, ${label}` })}<div class="chart-cursor" hidden></div></div>
+    <div class="axis small muted num"><span>${fmtDate(first.date)}</span><span id="perf-readout" aria-live="polite">${fmtDate(last.date)} · ${money(last.value)}</span></div>`;
+
+  // Hover / touch readout
+  const wrap = $('.chart-wrap', box);
+  const cursor = $('.chart-cursor', box);
+  const readout = $('#perf-readout', box);
+  const show = (clientX) => {
+    const r = wrap.getBoundingClientRect();
+    const i = Math.max(0, Math.min(pts.length - 1, Math.round(((clientX - r.left) / r.width) * (pts.length - 1))));
+    const p = pts[i];
+    cursor.hidden = false;
+    cursor.style.left = `${(i / (pts.length - 1)) * 100}%`;
+    readout.textContent = `${fmtDate(p.date)} · ${money(p.value)} value · ${money(p.invested)} invested`;
+  };
+  wrap.onpointermove = (e) => show(e.clientX);
+  wrap.onpointerleave = () => { cursor.hidden = true; readout.textContent = `${fmtDate(last.date)} · ${money(last.value)}`; };
+}
+
+function renderTx() {
+  const box = $('#tx-section');
+  if (!box) return;
+  const all = store.state.transactions;
+  if (!port.txOpen) {
+    box.innerHTML = `<div class="tx-head"><h2>Transactions</h2><button class="btn" type="button" data-act="tx-toggle">Show transactions (${all.length})</button></div>`;
+    return;
+  }
+  const q = port.q.trim().toLowerCase();
+  const amount = (t) => t.qty * t.price + (t.type === 'buy' ? 1 : -1) * (+t.fee || 0);
+  let list = all.filter((t) =>
+    (!port.asset || t.assetId === port.asset) &&
+    (!port.type || t.type === port.type) &&
+    (!q || `${assetName(t.assetId)} ${assetById(t.assetId)?.symbol || ''} ${t.note || ''}`.toLowerCase().includes(q)));
+  const sorters = {
+    new: (a, b) => b.date.localeCompare(a.date), old: (a, b) => a.date.localeCompare(b.date),
+    big: (a, b) => amount(b) - amount(a), small: (a, b) => amount(a) - amount(b),
+  };
+  list = list.sort(sorters[port.txSort]);
+  const pages = Math.max(1, Math.ceil(list.length / TX_PAGE));
+  port.page = Math.min(port.page, pages);
+  const pageItems = list.slice((port.page - 1) * TX_PAGE, port.page * TX_PAGE);
+  const withTx = [...new Set(all.map((t) => t.assetId))].map(assetById).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
+  const opt = (v, l, cur) => `<option value="${v}"${v === cur ? ' selected' : ''}>${esc(l)}</option>`;
+  const typeLabel = { buy: 'Buy', sell: 'Sell', split: 'Split' };
+
+  box.innerHTML = `
+    <div class="tx-head"><h2>Transactions</h2><button class="btn ghost" type="button" data-act="tx-toggle">Hide</button></div>
+    <div class="tx-filters">
+      <div class="field"><label for="tx-q">Search</label><input id="tx-q" type="search" value="${esc(port.q)}" placeholder="Asset, ticker or note" autocomplete="off"></div>
+      <div class="field"><label for="tx-f-asset">Asset</label><select id="tx-f-asset">${opt('', 'All assets', port.asset)}${withTx.map((a) => opt(a.id, a.name, port.asset)).join('')}</select></div>
+      <div class="field"><label for="tx-f-type">Type</label><select id="tx-f-type">${opt('', 'All types', port.type)}${opt('buy', 'Buys', port.type)}${opt('sell', 'Sells', port.type)}${opt('split', 'Splits and spin-offs', port.type)}</select></div>
+      <div class="field"><label for="tx-f-sort">Sort</label><select id="tx-f-sort">${opt('new', 'Newest first', port.txSort)}${opt('old', 'Oldest first', port.txSort)}${opt('big', 'Largest amount', port.txSort)}${opt('small', 'Smallest amount', port.txSort)}</select></div>
+    </div>
+    <p class="small muted">${list.length} of ${all.length} transactions${list.length ? ` · ${money(list.reduce((s, t) => s + (t.type === "buy" ? amount(t) : t.type === "sell" ? -amount(t) : 0), 0))} net (buys minus sells)` : ''}</p>
+    ${pageItems.length ? `<ul class="tx-list">${pageItems.map((t) => `
+      <li data-id="${t.id}">
+        <span class="chip ${t.type}">${typeLabel[t.type] || t.type}</span>
+        <div class="tx-main"><strong>${esc(assetName(t.assetId))}</strong><span class="small muted num">${fmtDate(t.date)} · ${fmtNum(t.qty)}${t.type === 'split' ? ' shares' : ` @ ${money(t.price)}`}${t.note ? ` · ${esc(t.note)}` : ''}</span></div>
+        <span class="num">${t.type === 'split' ? '' : money(amount(t))}</span>
+        <button class="icon-btn" type="button" data-act="del-tx" aria-label="Delete transaction">${icon('trash', 18)}</button>
+      </li>`).join('')}</ul>` : '<p class="muted">No transactions match these filters.</p>'}
+    ${pages > 1 ? `<nav class="pager" aria-label="Transaction pages">
+      <button class="btn small" type="button" data-act="tx-page" data-page="${port.page - 1}"${port.page === 1 ? ' disabled' : ''}>Previous</button>
+      <span class="small muted num">Page ${port.page} of ${pages}</span>
+      <button class="btn small" type="button" data-act="tx-page" data-page="${port.page + 1}"${port.page === pages ? ' disabled' : ''}>Next</button>
+    </nav>` : ''}`;
+
+  const refilter = (fn) => (e) => { fn(e.target.value); port.page = 1; renderTx(); };
+  $('#tx-q', box).addEventListener('input', (e) => {
+    port.q = e.target.value; port.page = 1;
+    const pos = e.target.selectionStart;
+    renderTx();
+    const input = $('#tx-q');
+    input.focus();
+    input.setSelectionRange(pos, pos);
+  });
+  $('#tx-f-asset', box).onchange = refilter((v) => (port.asset = v));
+  $('#tx-f-type', box).onchange = refilter((v) => (port.type = v));
+  $('#tx-f-sort', box).onchange = refilter((v) => (port.txSort = v));
 }
 
 function openTx({ assetId } = {}) {
@@ -1065,6 +1220,14 @@ const ACTIONS = {
   analyze: (id) => { ui.aiAsset = id; location.hash = 'ai'; analyzeAsset(id); },
   buy: (id) => openTx({ assetId: id }),
   'add-tx': () => openTx(),
+  'hold-sort': (_, btn) => {
+    const k = btn.dataset.key;
+    port.sort = port.sort.key === k ? { key: k, dir: -port.sort.dir } : { key: k, dir: k === 'name' || k === 'toAth' ? 1 : -1 };
+    render();
+  },
+  'tx-toggle': () => { port.txOpen = !port.txOpen; renderTx(); },
+  'tx-page': (_, btn) => { port.page = +btn.dataset.page; renderTx(); $('#tx-section')?.scrollIntoView({ block: 'start', behavior: 'smooth' }); },
+  'perf-retry': () => { perf.promise = null; loadPerf(); renderPerf(); },
   'import-t212': () => openImport(),
   'del-tx': (id) => deleteTx(id),
   'new-plan': () => newPlan(),
