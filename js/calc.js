@@ -10,7 +10,11 @@ export function holdings(transactions, priceOf, athOf = () => null) {
   for (const t of txs) {
     const h = by.get(t.assetId) || { assetId: t.assetId, qty: 0, cost: 0, realized: 0, deposited: 0 };
     const fee = +t.fee || 0;
-    if (t.type === 'buy') {
+    if (t.type === 'split') {
+      // Share count changes, cost basis doesn't (stock splits, spin-offs)
+      h.qty = Math.max(0, h.qty + t.qty);
+      if (h.qty < 1e-12) { h.qty = 0; h.cost = 0; }
+    } else if (t.type === 'buy') {
       h.qty += t.qty;
       h.cost += t.qty * t.price + fee;
       h.deposited += t.qty * t.price + fee;
@@ -42,10 +46,13 @@ export function holdings(transactions, priceOf, athOf = () => null) {
   });
 
   const open = rows.filter((r) => r.qty > 0);
-  const priced = open.every((r) => r.value != null);
+  const pricedRows = open.filter((r) => r.value != null);
   const totals = {
-    cost: sum(open, (r) => r.cost),
-    value: priced ? sum(open, (r) => r.value) : null,
+    // Cost and value cover the same priced holdings, so P/L stays meaningful while prices load
+    cost: sum(pricedRows, (r) => r.cost),
+    totalCost: sum(open, (r) => r.cost),
+    unpriced: open.length - pricedRows.length,
+    value: pricedRows.length ? sum(pricedRows, (r) => r.value) : null,
     realized: sum(rows, (r) => r.realized),
     deposited: sum(rows, (r) => r.deposited),
     valueAtAth: open.every((r) => r.valueAtAth != null) ? sum(open, (r) => r.valueAtAth) : null,

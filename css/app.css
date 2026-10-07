@@ -332,3 +332,9 @@ dialog.sheet::backdrop { background: oklch(0.1 0 0 / 0.45); }
 .gate-brand img { border-radius: 14px; }
 .gate-brand h1 { letter-spacing: 0.08em; }
 .btn.google { min-height: 48px; font-weight: 600; }
+
+/* ---------- Import */
+.imp-summary { display: flex; flex-direction: column; gap: 16px; }
+.imp-summary:empty { display: none; }
+.imp-card { display: flex; flex-direction: column; gap: 8px; padding: 16px; box-shadow: none; background: var(--surface-2); }
+p.warn { color: var(--warning); }

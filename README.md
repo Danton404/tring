@@ -12,6 +12,21 @@ No build step: plain HTML, CSS and ES modules. Host the folder on GitHub Pages (
 - **AI**: analyse an asset (trend, momentum, RSI, SMAs and volatility from 200 days of data, sentiment, plus news via web search on Claude and ChatGPT), review your portfolio or a plan, or chat about anything. The model sees your app data, so it can do calculations the app doesn't have yet.
 - **Settings**: API keys, models, cloud sync, export and import.
 
+## Importing from Trading 212
+
+Portfolio > Import from Trading 212 accepts T212 history CSV exports (one year per file; add several at once). It:
+
+- imports buys and sells (market, limit and stop orders), stock splits and spin-offs; other rows (deposits, dividends) are skipped;
+- groups trades by ISIN, so the same company bought on different listings (e.g. NFLX in USD and NFC in EUR) is one holding;
+- uses T212's Total column for exact cost, converts it to the account currency (EUR; BGN at the fixed 1.95583, USD at that day's EUR/USD close) and keeps conversion fees as fees;
+- skips trades it has imported before, so you can re-import overlapping files.
+
+Live prices for imported holdings:
+
+- US-listed companies: Twelve Data (free), converted to EUR with the live EUR/USD rate.
+- Everything else (UCITS ETFs, ETPs, non-US stocks): Yahoo Finance through the server, preferring the Xetra listing in EUR and checking it against your last trade price. Yahoo is unofficial and may break; holdings without a live price fall back to their last trade price.
+- Quotes refresh every 15 minutes to stay inside Twelve Data's 800 free requests a day.
+
 ## Keys you need
 
 | What | Where | Notes |

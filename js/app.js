@@ -2,6 +2,7 @@ import { store, uid, pull, push, syncEnabled, clearLocal } from './store.js';
 import { hosted, cloud, initAuth, signInWithGoogle, signOut, loadInfo, serverKeys } from './cloud.js';
 import * as market from './market.js';
 import { holdings, planSummary, indicators } from './calc.js';
+import { parseCsv, isT212, summarize, buildTransactions } from './importer.js';
 import { ask, PROVIDERS, modelFor, availableProviders, activeProvider } from './ai.js';
 import {
   $, $$, esc, icon, fmtMoney, fmtSignedMoney, fmtPct, fmtNum, fmtDate, todayISO, tone,
@@ -22,8 +23,18 @@ const CHAT_KEY = 'tring.chat.v1';
 const ui = { tab: 'markets', sort: 'default', planId: null, busy: false };
 let chat = loadChat();
 
-const priceOf = (id) => market.quote(id)?.price ?? null;
-const athOf = (id) => market.ath(id)?.ath ?? null;
+// Portfolio maths runs in the base currency (EUR after a Trading 212 import, USD otherwise).
+const base = () => store.state.baseCurrency || 'USD';
+const money = (n) => fmtMoney(n, base());
+const smoney = (n) => fmtSignedMoney(n, base());
+const toBase = (id, n) => {
+  if (n == null) return null;
+  const fx = market.fxRate(assetById(id)?.currency || 'USD', base());
+  return fx == null ? null : n * fx;
+};
+// Live price in the base currency; imported holdings without a live source fall back to their last trade price
+const priceOf = (id) => toBase(id, market.quote(id)?.price ?? null) ?? assetById(id)?.lastPrice ?? null;
+const athOf = (id) => (market.ath(id)?.partial ? null : toBase(id, market.ath(id)?.ath ?? null));
 const assetById = (id) => store.state.assets.find((a) => a.id === id);
 const assetName = (id) => assetById(id)?.name || 'Removed asset';
 const assetColor = (id) => colorAt(store.state.assets.findIndex((a) => a.id === id));
@@ -68,7 +79,7 @@ async function refresh(force = false) {
   const btn = $('#refresh-btn');
   btn.classList.add('spinning');
   btn.disabled = true;
-  await market.refreshAll(store.state.assets, { force, onUpdate: onMarket });
+  await market.refreshAll(store.state.assets, { force, onUpdate: onMarket, base: base() });
   btn.classList.remove('spinning');
   btn.disabled = false;
   recordSnapshot();
@@ -82,7 +93,7 @@ function onMarket() {
 // One portfolio snapshot per day, used for the performance chart.
 function recordSnapshot() {
   const { open, totals } = holdings(store.state.transactions, priceOf);
-  if (!open.length || totals.value == null) return;
+  if (!open.length || totals.value == null || totals.unpriced) return;
   const snap = { date: todayISO(), value: round(totals.value), invested: round(totals.cost) };
   const prev = store.state.snapshots.find((s) => s.date === snap.date);
   if (prev && prev.value === snap.value && prev.invested === snap.invested) return;
@@ -95,7 +106,7 @@ function emptyState(title, text, action = '') {
   return `<div class="empty card"><h2>${esc(title)}</h2><p class="muted">${esc(text)}</p>${action}</div>`;
 }
 
-const assetOptions = (selected, list = store.state.assets) =>
+const assetOptions = (selected, list = store.state.assets.filter((a) => !a.archived || a.id === selected)) =>
   list.map((a) => `<option value="${a.id}"${a.id === selected ? ' selected' : ''}>${esc(a.name)} (${esc(a.symbol)})</option>`).join('');
 
 // =====================================================================
@@ -116,7 +127,7 @@ function assetView(a) {
 
 function renderMarkets(el) {
   const needsKey = !hosted && !store.settings.twelveKey && store.state.assets.some((a) => a.source === 'twelve');
-  let rows = store.state.assets.map(assetView);
+  let rows = store.state.assets.filter((a) => !a.archived).map(assetView);
   const sorters = {
     closest: (x, y) => (x.toAth ?? Infinity) - (y.toAth ?? Infinity),
     furthest: (x, y) => (y.toAth ?? -1) - (x.toAth ?? -1),
@@ -140,8 +151,9 @@ function renderMarkets(el) {
 
 function assetCard(v) {
   const { a, q, at, price, ath, toAth, ofAth, err, loading } = v;
+  const cmoney = (n) => fmtMoney(n, a.currency || 'USD');
   const priceBlock = price != null
-    ? `<div class="price num">${fmtMoney(price)}</div>${q.changePct != null && isFinite(q.changePct) ? `<div class="small num ${tone(q.changePct)}">${fmtPct(q.changePct)} today</div>` : ''}`
+    ? `<div class="price num">${cmoney(price)}</div>${q.changePct != null && isFinite(q.changePct) ? `<div class="small num ${tone(q.changePct)}">${fmtPct(q.changePct)} today</div>` : ''}`
     : loading ? '<div class="skeleton" style="width:96px;height:24px"></div>' : '';
   let body;
   if (price == null && err) {
@@ -149,14 +161,18 @@ function assetCard(v) {
       ? `<a class="btn small" href="#settings">Open Settings</a>`
       : `<button class="btn small" type="button" data-act="retry">${icon('refresh', 16)}Retry</button>`;
     body = `<div class="card-error" role="alert"><p>${esc(err)}</p>${fix}</div>`;
+  } else if (a.source === 'none') {
+    body = `<p class="muted small">No live price source found for this listing. The portfolio uses its last trade price${a.lastPrice ? ` (${money(a.lastPrice)}, ${fmtDate(a.lastPriceDate)})` : ''}.</p>`;
+  } else if (price != null && at?.partial) {
+    body = `<p class="muted small">This listing has no price history, so its all-time high isn't available.</p>`;
   } else if (price == null || ath == null) {
     body = `<div class="skeleton" style="height:56px"></div><div class="skeleton" style="height:8px;margin-top:12px"></div>`;
   } else {
-    const range = q.low52 && q.high52 ? ` · 52w ${fmtMoney(q.low52)} to ${fmtMoney(q.high52)}` : '';
+    const range = q.low52 && q.high52 ? ` · 52w ${cmoney(q.low52)} to ${cmoney(q.high52)}` : '';
     body = `
       <div class="ath-row">
         <div><span class="label">Gain needed to reach ATH</span><strong class="big num">${toAth < 0.01 ? 'At ATH' : fmtPct(toAth)}</strong></div>
-        <div class="right"><span class="label">All-time high</span><span class="num strong">${fmtMoney(ath)}</span><span class="muted small">${fmtDate(at.athDate)}</span></div>
+        <div class="right"><span class="label">All-time high</span><span class="num strong">${cmoney(ath)}</span><span class="muted small">${fmtDate(at.athDate)}</span></div>
       </div>
       <div class="meter" role="meter" aria-label="Price as a share of all-time high" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${ofAth.toFixed(1)}"><span style="width:${ofAth}%;background:${assetColor(a.id)}"></span></div>
       <p class="muted small num">${ofAth.toFixed(1)}% of ATH · ${fmtPct(ofAth - 100)} from peak${range}</p>`;
@@ -212,7 +228,7 @@ function openAddAsset() {
       store.update((s) => s.assets.push(asset));
       close();
       toast(`${asset.name} added`);
-      market.refreshAll([asset], { onUpdate: onMarket });
+      market.refreshAll([asset], { onUpdate: onMarket, base: base() });
     };
 
     form.onsubmit = async (e) => {
@@ -278,8 +294,8 @@ function renderPortfolio(el) {
   const { state } = store;
   if (!state.transactions.length) {
     el.innerHTML = emptyState('No investments yet',
-      'Log a buy to start tracking invested capital and performance. You can also log buys straight from a plan in the Plan tab.',
-      `<button class="btn primary" type="button" data-act="add-tx">${icon('plus')}Log a transaction</button>`);
+      'Import your Trading 212 history, or log a buy to start tracking invested capital and performance. You can also log buys straight from a plan in the Plan tab.',
+      `<div class="btn-row"><button class="btn primary" type="button" data-act="import-t212">${icon('upload')}Import from Trading 212</button><button class="btn" type="button" data-act="add-tx">${icon('plus')}Log a transaction</button></div>`);
     return;
   }
   const { open, rows, totals } = holdings(state.transactions, priceOf, athOf);
@@ -301,13 +317,13 @@ function renderPortfolio(el) {
   const totalVal = segs.reduce((s, x) => s + x.value, 0);
 
   el.innerHTML = `
-    <div class="toolbar end"><button class="btn primary" type="button" data-act="add-tx">${icon('plus')}Log transaction</button></div>
+    <div class="toolbar end"><div class="btn-row"><button class="btn" type="button" data-act="import-t212">${icon('upload')}Import from Trading 212</button><button class="btn primary" type="button" data-act="add-tx">${icon('plus')}Log transaction</button></div></div>
     <section class="kpis card">
-      ${kpi('Market value', fmtMoney(totals.value))}
-      ${kpi('Invested (cost basis)', fmtMoney(totals.cost), `${fmtMoney(totals.deposited)} total bought`)}
-      ${kpi('Unrealized P/L', fmtSignedMoney(totals.pl), fmtPct(totals.plPct), tone(totals.pl))}
-      ${kpi('Realized P/L', fmtSignedMoney(totals.realized), '', tone(totals.realized))}
-      ${kpi('Value if all at ATH', fmtMoney(totals.valueAtAth), toAthTotal != null ? `${fmtPct(toAthTotal)} from here` : '')}
+      ${kpi('Market value', money(totals.value), totals.unpriced ? `${totals.unpriced} holding${totals.unpriced === 1 ? '' : 's'} not priced yet` : '')}
+      ${kpi('Invested (cost basis)', money(totals.totalCost), `${money(totals.deposited)} total bought`)}
+      ${kpi('Unrealized P/L', smoney(totals.pl), fmtPct(totals.plPct), tone(totals.pl))}
+      ${kpi('Realized P/L', smoney(totals.realized), '', tone(totals.realized))}
+      ${kpi('Value if all at ATH', money(totals.valueAtAth), toAthTotal != null ? `${fmtPct(toAthTotal)} from here` : '')}
     </section>
     <div class="two-col">
       <section class="card"><h2>Performance</h2>${chart}</section>
@@ -322,10 +338,10 @@ function renderPortfolio(el) {
         <thead><tr><th>Asset</th><th class="r">Qty</th><th class="r">Avg cost</th><th class="r">Price</th><th class="r">Value</th><th class="r">P/L</th><th class="r">At ATH</th></tr></thead>
         <tbody>${open.map((r) => `<tr>
           <td><span class="dot" style="background:${assetColor(r.assetId)}"></span>${esc(assetName(r.assetId))}</td>
-          <td class="r num">${fmtNum(r.qty)}</td><td class="r num">${fmtMoney(r.avg)}</td><td class="r num">${fmtMoney(r.price)}</td>
-          <td class="r num">${fmtMoney(r.value)}</td>
-          <td class="r num ${tone(r.pl)}">${fmtSignedMoney(r.pl)}<br><span class="small">${fmtPct(r.plPct)}</span></td>
-          <td class="r num">${fmtMoney(r.valueAtAth)}</td></tr>`).join('')}</tbody></table></div>`
+          <td class="r num">${fmtNum(r.qty)}</td><td class="r num">${money(r.avg)}</td><td class="r num">${money(r.price)}</td>
+          <td class="r num">${money(r.value)}</td>
+          <td class="r num ${tone(r.pl)}">${smoney(r.pl)}<br><span class="small">${fmtPct(r.plPct)}</span></td>
+          <td class="r num">${money(r.valueAtAth)}</td></tr>`).join('')}</tbody></table></div>`
         : '<p class="muted small">No open positions.</p>'}
       ${rows.some((r) => r.qty === 0 && r.realized) ? `<p class="small muted">Closed positions are included in realized P/L.</p>` : ''}
     </section>
@@ -333,8 +349,8 @@ function renderPortfolio(el) {
       <ul class="tx-list">${[...state.transactions].sort((a, b) => b.date.localeCompare(a.date)).map((t) => `
         <li data-id="${t.id}">
           <span class="chip ${t.type}">${t.type === 'buy' ? 'Buy' : 'Sell'}</span>
-          <div class="tx-main"><strong>${esc(assetName(t.assetId))}</strong><span class="small muted num">${fmtDate(t.date)} · ${fmtNum(t.qty)} @ ${fmtMoney(t.price)}${t.note ? ` · ${esc(t.note)}` : ''}</span></div>
-          <span class="num">${fmtMoney(t.qty * t.price + (t.type === 'buy' ? 1 : -1) * (+t.fee || 0))}</span>
+          <div class="tx-main"><strong>${esc(assetName(t.assetId))}</strong><span class="small muted num">${fmtDate(t.date)} · ${fmtNum(t.qty)} @ ${money(t.price)}${t.note ? ` · ${esc(t.note)}` : ''}</span></div>
+          <span class="num">${money(t.qty * t.price + (t.type === 'buy' ? 1 : -1) * (+t.fee || 0))}</span>
           <button class="icon-btn" type="button" data-act="del-tx" aria-label="Delete transaction">${icon('trash', 18)}</button>
         </li>`).join('')}</ul>
     </section>`;
@@ -352,12 +368,12 @@ function openTx({ assetId } = {}) {
       <div class="field"><label for="tx-asset">Asset</label><select id="tx-asset" name="assetId">${assetOptions(first)}</select></div>
       <div class="field"><label for="tx-date">Date</label><input id="tx-date" name="date" type="date" value="${todayISO()}" max="${todayISO()}" required></div>
       <div class="row-2">
-        <div class="field"><label for="tx-price">Price per unit (USD)</label><input id="tx-price" name="price" type="number" inputmode="decimal" step="any" min="0" value="${p0 != null ? round(p0, 6) : ''}"></div>
-        <div class="field"><label for="tx-amount">Amount (USD)</label><input id="tx-amount" name="amount" type="number" inputmode="decimal" step="any" min="0"></div>
+        <div class="field"><label for="tx-price">Price per unit (${base()})</label><input id="tx-price" name="price" type="number" inputmode="decimal" step="any" min="0" value="${p0 != null ? round(p0, 6) : ''}"></div>
+        <div class="field"><label for="tx-amount">Amount (${base()})</label><input id="tx-amount" name="amount" type="number" inputmode="decimal" step="any" min="0"></div>
       </div>
       <div class="row-2">
         <div class="field"><label for="tx-qty">Quantity</label><input id="tx-qty" name="qty" type="number" inputmode="decimal" step="any" min="0"></div>
-        <div class="field"><label for="tx-fee">Fee (USD)</label><input id="tx-fee" name="fee" type="number" inputmode="decimal" step="any" min="0" value="0"></div>
+        <div class="field"><label for="tx-fee">Fee (${base()})</label><input id="tx-fee" name="fee" type="number" inputmode="decimal" step="any" min="0" value="0"></div>
       </div>
       <p class="hint">Enter the amount or the quantity; the other is calculated from the price.</p>
       <p class="form-error" id="tx-error" role="alert"></p>
@@ -393,6 +409,127 @@ function deleteTx(id) {
   if (!t) return;
   store.update((s) => (s.transactions = s.transactions.filter((x) => x.id !== id)));
   toast('Transaction deleted', { action: 'Undo', onAction: () => store.update((s) => s.transactions.push(t)) });
+}
+
+// ---------- Trading 212 import
+
+function openImport() {
+  openSheet('Import from Trading 212', `
+    <div class="form">
+      <p class="small muted">In Trading 212 open History, tap Export, pick a date range (one year per file) and download the CSV. You can add several files; overlapping rows are merged and trades already imported are skipped.</p>
+      <div class="field"><label for="imp-files">CSV files</label><input id="imp-files" type="file" accept=".csv,text/csv" multiple></div>
+      <div id="imp-summary" class="imp-summary"></div>
+      <p class="form-error" id="imp-error" role="alert"></p>
+    </div>`, (body, close) => {
+    let summary = null;
+    const err = $('#imp-error', body);
+    const box = $('#imp-summary', body);
+
+    $('#imp-files', body).onchange = async (e) => {
+      err.textContent = '';
+      box.innerHTML = '';
+      const files = [...e.target.files];
+      if (!files.length) return;
+      try {
+        const rows = [];
+        for (const f of files) {
+          const parsed = parseCsv(await f.text());
+          if (!isT212(parsed)) throw new Error(`${f.name} doesn't look like a Trading 212 history export.`);
+          rows.push(...parsed);
+        }
+        summary = summarize(rows);
+        if (!summary.trades.length) throw new Error('No trades found in these files.');
+      } catch (ex) {
+        summary = null;
+        err.textContent = ex.message;
+        return;
+      }
+      const open = summary.assets.filter((a) => a.open);
+      const closed = summary.assets.length - open.length;
+      const manual = store.state.transactions.filter((t) => !t.extId?.startsWith('t212:')).length;
+      const baseChanges = base() !== summary.base && store.state.transactions.length > 0;
+      const converted = [...new Set(summary.trades.map((r) => r['Currency (Total)']).filter((c) => c && c !== summary.base))];
+      box.innerHTML = `
+        <div class="card imp-card">
+          <p><strong>${summary.trades.length} trades</strong> from ${fmtDate(summary.from)} to ${fmtDate(summary.to)}${summary.skipped ? ` <span class="muted">(${summary.skipped} other rows skipped)</span>` : ''}</p>
+          <p class="small">Portfolio currency: <strong>${summary.base}</strong>.${converted.length ? ` Amounts in ${converted.join(', ')} are converted at each trade date's rate${converted.includes('BGN') ? ' (BGN at the fixed 1.95583)' : ''}.` : ''}</p>
+          ${summary.partial.length ? `<p class="small warn">Some sells include shares bought before ${fmtDate(summary.from)} (${summary.partial.map(esc).join(', ')}). Add an older export too for complete realized P/L.</p>` : ''}
+          <p class="small"><strong>${open.length} open positions:</strong> ${open.map((a) => esc(a.name)).join(', ') || 'none'}${closed ? `. ${closed} closed positions are kept for realized P/L.` : '.'}</p>
+        </div>
+        ${manual ? `<div class="field"><span class="label" id="imp-mode-label">Your ${manual} manually logged transactions</span>
+          <div class="seg wrap" role="radiogroup" aria-labelledby="imp-mode-label">
+            <label><input type="radio" name="imp-mode" value="replace"${baseChanges ? ' checked' : ''}><span>Replace them</span></label>
+            <label><input type="radio" name="imp-mode" value="keep"${baseChanges ? '' : ' checked'}><span>Keep them</span></label>
+          </div>
+          ${baseChanges ? `<p class="hint">They were logged in ${base()}; keeping them would mix currencies.</p>` : ''}</div>` : ''}
+        <button class="btn primary block" type="button" id="imp-go">Import</button>`;
+
+      $('#imp-go', box).onclick = async (ev) => {
+        const btn = ev.currentTarget;
+        btn.disabled = true;
+        err.textContent = '';
+        const step = (t) => (btn.textContent = t);
+        try {
+          const replace = $('input[name=imp-mode]:checked', box)?.value === 'replace';
+          step('Loading exchange rates...');
+          const days = Math.ceil((Date.now() - new Date(summary.from).getTime()) / 864e5) + 15;
+          const fx = {};
+          for (const ccy of summary.needFx) fx[ccy] = await market.fxHistory(summary.base, ccy, days);
+
+          // Reuse assets already linked to an ISIN, create the rest
+          const existing = new Map(store.state.assets.filter((a) => a.isin).map((a) => [a.isin, a]));
+          const ids = new Map(summary.assets.map((a) => [a.isin, existing.get(a.isin)?.id || uid()]));
+          const { txs, lastPrice } = buildTransactions(summary, fx, (isin) => ids.get(isin), uid);
+
+          const newAssets = [];
+          const updates = new Map();
+          let i = 0;
+          for (const a of summary.assets) {
+            const last = lastPrice[a.isin];
+            const patch = { lastPrice: last?.price ?? null, lastPriceDate: last?.date ?? null, archived: !a.open };
+            const old = existing.get(a.isin);
+            if (old) {
+              updates.set(old.id, { ...patch, archived: old.archived && !a.open });
+              continue;
+            }
+            let src = null;
+            if (a.open) {
+              step(`Finding prices ${++i}/${summary.assets.filter((x) => x.open).length}...`);
+              try { src = await market.resolveIsin({ isin: a.isin, tickers: [...a.tickers], refPriceEur: summary.base === 'EUR' ? last?.price : null }); } catch { /* falls back to last trade price */ }
+            }
+            newAssets.push({
+              id: ids.get(a.isin),
+              name: a.name,
+              symbol: src?.symbol || [...a.tickers].pop() || a.isin,
+              kind: /\b(ETF|ETP|UCITS)\b|\((Acc|Dist)\)|iShares|Vanguard|Xtrackers|VanEck|Invesco|Amundi|SPDR/i.test(a.name) ? 'etf' : 'stock',
+              source: src?.source || 'none',
+              ...(src?.yahoo && { yahoo: src.yahoo }),
+              currency: src?.currency || summary.base,
+              isin: a.isin,
+              ...patch,
+            });
+          }
+
+          store.update((s) => {
+            if (s.baseCurrency !== summary.base) s.snapshots = []; // old snapshots are in another currency
+            s.baseCurrency = summary.base;
+            s.assets = s.assets.map((x) => (updates.has(x.id) ? { ...x, ...updates.get(x.id) } : x)).concat(newAssets);
+            if (replace) s.transactions = s.transactions.filter((t) => t.extId?.startsWith('t212:'));
+            const have = new Set(s.transactions.map((t) => t.extId).filter(Boolean));
+            s.transactions.push(...txs.filter((t) => !have.has(t.extId)));
+          });
+          const unpriced = newAssets.filter((x) => x.source === 'none' && !x.archived).length;
+          close();
+          toast(`Imported ${txs.length} trades${unpriced ? `. ${unpriced} holding${unpriced === 1 ? '' : 's'} use the last trade price` : ''}`);
+          await refresh();
+        } catch (ex) {
+          err.textContent = `Import failed: ${ex.message}`;
+          btn.disabled = false;
+          btn.textContent = 'Import';
+        }
+      };
+    };
+  });
 }
 
 // =====================================================================
@@ -450,8 +587,8 @@ function renderPlan(el) {
             <label><input type="radio" name="mode" value="fixed"${plan.mode === 'fixed' ? ' checked' : ''}><span>Fixed amount per buy</span></label>
           </div></div>
         ${plan.mode === 'total'
-          ? `<div class="field"><label for="p-capital">Total capital to invest (USD)</label><input id="p-capital" name="capital" type="number" inputmode="decimal" min="0" step="any" value="${plan.capital}"></div>`
-          : `<div class="field"><label for="p-amount">Amount per buy, X (USD)</label><input id="p-amount" name="amount" type="number" inputmode="decimal" min="0" step="any" value="${plan.amount}"></div>`}
+          ? `<div class="field"><label for="p-capital">Total capital to invest (${base()})</label><input id="p-capital" name="capital" type="number" inputmode="decimal" min="0" step="any" value="${plan.capital}"></div>`
+          : `<div class="field"><label for="p-amount">Amount per buy, X (${base()})</label><input id="p-amount" name="amount" type="number" inputmode="decimal" min="0" step="any" value="${plan.amount}"></div>`}
         <div class="row-2">
           <div class="field"><label for="p-dur">Invest over</label><input id="p-dur" name="durationValue" type="number" inputmode="numeric" min="1" step="1" value="${plan.durationValue}"></div>
           <div class="field"><label for="p-unit">Unit</label><select id="p-unit" name="durationUnit"><option value="weeks"${plan.durationUnit === 'weeks' ? ' selected' : ''}>Weeks</option><option value="months"${plan.durationUnit === 'months' ? ' selected' : ''}>Months</option></select></div>
@@ -531,7 +668,7 @@ function updatePlanResults() {
   const segs = plan.allocations.map((al) => ({ label: assetName(al.assetId), value: +al.pct || 0, color: assetColor(al.assetId) }));
   if (off && s.allocated < 100) segs.push({ label: 'Unallocated', value: 100 - s.allocated, color: 'var(--border)' });
   const d = $('#plan-donut');
-  if (d) d.innerHTML = donut(segs, { label: 'Plan allocation', center: s.perBuy ? fmtMoney(s.perBuy) : '' });
+  if (d) d.innerHTML = donut(segs, { label: 'Plan allocation', center: s.perBuy ? money(s.perBuy) : '' });
 
   if (!s.n) {
     res.innerHTML = `<h2>Result</h2><p class="muted">Set a duration of at least 1 and a start date to see the schedule.</p>`;
@@ -542,14 +679,14 @@ function updatePlanResults() {
     <h2>Result</h2>
     <div class="kpis">
       <div class="kpi"><span class="label">Number of buys</span><strong class="num">${s.n}</strong><span class="small muted">${FREQS[plan.frequency].toLowerCase()}</span></div>
-      <div class="kpi"><span class="label">Each buy</span><strong class="num">${fmtMoney(s.perBuy)}</strong></div>
-      <div class="kpi"><span class="label">Total invested</span><strong class="num">${fmtMoney(s.total)}</strong></div>
+      <div class="kpi"><span class="label">Each buy</span><strong class="num">${money(s.perBuy)}</strong></div>
+      <div class="kpi"><span class="label">Total invested</span><strong class="num">${money(s.total)}</strong></div>
       <div class="kpi"><span class="label">Last buy</span><strong class="num">${fmtDate(s.end)}</strong></div>
     </div>
     <div class="table-wrap"><table>
       <thead><tr><th>Asset</th><th class="r">Share</th><th class="r">Per buy</th><th class="r">Over plan</th><th class="r">Units per buy now</th></tr></thead>
       <tbody>${s.allocations.map((a) => `<tr><td><span class="dot" style="background:${assetColor(a.assetId)}"></span>${esc(assetName(a.assetId))}</td>
-        <td class="r num">${fmtPct(+a.pct || 0, { signed: false, digits: 1 })}</td><td class="r num">${fmtMoney(a.amount)}</td><td class="r num">${fmtMoney(a.total)}</td>
+        <td class="r num">${fmtPct(+a.pct || 0, { signed: false, digits: 1 })}</td><td class="r num">${money(a.amount)}</td><td class="r num">${money(a.total)}</td>
         <td class="r num">${a.units != null ? fmtNum(a.units, 6) : '-'}</td></tr>`).join('')}</tbody>
     </table></div>`;
 
@@ -559,7 +696,7 @@ function updatePlanResults() {
     <li class="${done.has(date) ? 'done' : ''}">
       <span class="small muted num">#${i + 1}</span>
       <span class="num">${fmtDate(date)}</span>
-      <span class="num">${fmtMoney(s.perBuy)}</span>
+      <span class="num">${money(s.perBuy)}</span>
       ${done.has(date) ? `<span class="chip buy">${icon('check', 14)}Logged</span>`
         : date <= today ? `<button class="btn small" type="button" data-act="log-buy" data-date="${date}">Log buys</button>`
         : `<span class="small muted">Upcoming</span>`}
@@ -612,10 +749,11 @@ function appData() {
   const { state } = store;
   const h = holdings(state.transactions, priceOf, athOf);
   return {
-    currency: 'USD',
+    portfolioCurrency: base(),
+    note: 'Asset prices and ATHs are in each asset\'s own currency; portfolio figures are in portfolioCurrency.',
     assets: state.assets.map((a) => {
       const v = assetView(a);
-      return { name: a.name, symbol: a.symbol, type: a.kind, price: v.price, dayChangePct: v.q?.changePct ?? null, allTimeHigh: v.ath, athDate: v.at?.athDate ?? null, gainNeededToAthPct: v.toAth != null ? round(v.toAth) : null };
+      return { name: a.name, symbol: a.symbol, type: a.kind, currency: a.currency || 'USD', price: v.price, dayChangePct: v.q?.changePct ?? null, allTimeHigh: v.ath, athDate: v.at?.athDate ?? null, gainNeededToAthPct: v.toAth != null ? round(v.toAth) : null };
     }),
     portfolio: {
       totals: Object.fromEntries(Object.entries(h.totals).map(([k, v]) => [k, v != null ? round(v) : null])),
@@ -768,7 +906,7 @@ async function analyzeAsset(id) {
   const web = store.settings.web && !!prov && PROVIDERS[prov].web;
   const prompt = `Analyze ${a.name} (${a.symbol}, ${KINDS[a.kind] || a.kind}).
 
-Market data in USD, as of ${todayISO()}:
+Market data in ${a.currency || 'USD'}, as of ${todayISO()}:
 - Price: ${f(v.price, 4)}; day change ${f(v.q?.changePct)}%
 - All-time high: ${f(v.ath, 4)} on ${v.at?.athDate || 'n/a'}; gain needed to reach it: ${f(v.toAth)}%
 ${ind ? `- Returns: 1 week ${f(ind.r1w)}%, 1 month ${f(ind.r1m)}%, 3 months ${f(ind.r3m)}%, 6 months ${f(ind.r6m)}%
@@ -927,6 +1065,7 @@ const ACTIONS = {
   analyze: (id) => { ui.aiAsset = id; location.hash = 'ai'; analyzeAsset(id); },
   buy: (id) => openTx({ assetId: id }),
   'add-tx': () => openTx(),
+  'import-t212': () => openImport(),
   'del-tx': (id) => deleteTx(id),
   'new-plan': () => newPlan(),
   'del-plan': () => {

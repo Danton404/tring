@@ -9,21 +9,21 @@ export const esc = (s) =>
 
 const MINUS = '−';
 const moneyFmt = {};
-function moneyFormatter(digits) {
-  return (moneyFmt[digits] ||= new Intl.NumberFormat('en-US', {
-    style: 'currency', currency: 'USD', minimumFractionDigits: Math.min(2, digits), maximumFractionDigits: digits,
+function moneyFormatter(digits, currency) {
+  return (moneyFmt[`${currency}:${digits}`] ||= new Intl.NumberFormat('en-US', {
+    style: 'currency', currency, minimumFractionDigits: Math.min(2, digits), maximumFractionDigits: digits,
   }));
 }
 
-export function fmtMoney(n) {
+export function fmtMoney(n, currency = 'USD') {
   if (n == null || !isFinite(n)) return '-';
   const a = Math.abs(n);
-  const s = moneyFormatter(a >= 1 || a === 0 ? 2 : 6).format(a);
+  const s = moneyFormatter(a >= 1 || a === 0 ? 2 : 6, currency).format(a);
   return n < 0 ? MINUS + s : s;
 }
-export function fmtSignedMoney(n) {
+export function fmtSignedMoney(n, currency = 'USD') {
   if (n == null || !isFinite(n)) return '-';
-  return (n > 0 ? '+' : n < 0 ? MINUS : '') + fmtMoney(Math.abs(n));
+  return (n > 0 ? '+' : n < 0 ? MINUS : '') + fmtMoney(Math.abs(n), currency);
 }
 export function fmtPct(n, { signed = true, digits = 2 } = {}) {
   if (n == null || !isFinite(n)) return '-';

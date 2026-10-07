@@ -1,13 +1,15 @@
-// Market data: Twelve Data (stocks, ETFs, indices, gold, FX) and CoinGecko (crypto, no key).
+// Market data: Twelve Data (US stocks, ETFs, gold, FX), CoinGecko (crypto, no key) and,
+// through the server, Yahoo Finance for European listings Twelve Data's free plan doesn't cover.
 import { store } from './store.js';
 import { hosted, callFn } from './cloud.js';
 
 const CACHE_KEY = 'tring.market.v1';
-const TTL = { quote: 5 * 60e3, ath: 12 * 3600e3, series: 6 * 3600e3 };
+// Quotes refresh every 15 minutes: a dozen holdings would otherwise exceed Twelve Data's 800 free credits/day
+const TTL = { quote: 15 * 60e3, ath: 12 * 3600e3, series: 6 * 3600e3 };
 
 const cache = (() => {
-  try { return { quotes: {}, ath: {}, series: {}, ...JSON.parse(localStorage.getItem(CACHE_KEY)) }; }
-  catch { return { quotes: {}, ath: {}, series: {} }; }
+  try { return { quotes: {}, ath: {}, series: {}, fx: {}, ...JSON.parse(localStorage.getItem(CACHE_KEY)) }; }
+  catch { return { quotes: {}, ath: {}, series: {}, fx: {} }; }
 })();
 const persist = () => {
   try { localStorage.setItem(CACHE_KEY, JSON.stringify(cache)); } catch { /* ignore */ }
@@ -37,11 +39,11 @@ async function twelveSlot() {
 }
 
 async function twelve(path, params) {
+  await twelveSlot();
   // Shared mode: the server's Twelve Data key serves every invited user, with a shared cache
   if (hosted) return callFn('market', { path, params });
   const key = store.settings.twelveKey;
   if (!key) throw new Error('Add a Twelve Data API key in Settings.');
-  await twelveSlot();
   const url = new URL(`https://api.twelvedata.com/${path}`);
   Object.entries({ ...params, apikey: key }).forEach(([k, v]) => url.searchParams.set(k, v));
   const res = await fetch(url);
@@ -85,6 +87,97 @@ function bumpAth(id) {
 export async function lookupTwelve(symbol) {
   const d = await twelve('quote', { symbol });
   return { name: d.name, symbol: d.symbol };
+}
+
+// ---------- Yahoo Finance (server only: Yahoo blocks browser requests)
+
+async function yahoo(path, params) {
+  if (!hosted) throw new Error('European prices need shared mode (signed in to TRING).');
+  return callFn('market', { path, params });
+}
+// { meta: { price, prevClose, currency, high52, low52 }, points: [{ t, high, close }] }
+const yahooChart = (symbol, range, interval) => yahoo('yahoo_chart', { symbol, range, interval });
+
+async function refreshYahoo(a, force) {
+  if (force || stale(cache.quotes[a.id], TTL.quote)) {
+    const { meta } = await yahooChart(a.yahoo, '5d', '1d');
+    cache.quotes[a.id] = {
+      price: meta.price,
+      change: meta.prevClose ? meta.price - meta.prevClose : null,
+      changePct: meta.prevClose ? (meta.price / meta.prevClose - 1) * 100 : null,
+      high52: meta.high52,
+      low52: meta.low52,
+      ts: Date.now(),
+    };
+  }
+  if (stale(cache.ath[a.id], TTL.ath)) {
+    const { points } = await yahooChart(a.yahoo, 'max', '1mo');
+    let best = null;
+    for (const p of points) if (p.high && (!best || p.high > best.ath)) best = { ath: p.high, athDate: new Date(p.t * 1000).toISOString().slice(0, 10) };
+    // Some listings (e.g. Stuttgart ISIN quotes) have no history; fall back to the current price
+    cache.ath[a.id] = best ? { ...best, ts: Date.now() } : { ath: cache.quotes[a.id]?.price, athDate: today(), partial: true, ts: Date.now() };
+  }
+  bumpAth(a.id);
+}
+
+const US_EXCHANGES = new Set(['NMS', 'NYQ', 'NGM', 'NCM', 'ASE', 'PCX', 'BTS', 'NYS', 'NAS']);
+const EUR_SUFFIXES = ['.DE', '.AS', '.PA', '.MI', '.F', '.BR', '.MC', '.VI', '.LS'];
+
+// Finds a price source for an ISIN. US listings use Twelve Data (free); everything else uses a
+// Yahoo EUR listing, checked against a recent EUR trade price so we never pick the wrong instrument.
+export async function resolveIsin({ isin, tickers, refPriceEur }) {
+  const { quotes = [] } = await yahoo('yahoo_search', { q: isin });
+  const us = quotes.find((q) => US_EXCHANGES.has(q.exchange) && !q.symbol.includes('.'));
+  if (us) return { source: 'twelve', symbol: us.symbol, currency: 'USD' };
+
+  const plausible = (p) => !refPriceEur || (p > refPriceEur * 0.5 && p < refPriceEur * 2);
+  const candidates = [
+    ...tickers.map((t) => `${t}.DE`),
+    ...quotes.map((q) => q.symbol).filter((s) => EUR_SUFFIXES.some((x) => s.endsWith(x))),
+    `${isin}.SG`,
+  ];
+  for (const sym of [...new Set(candidates)]) {
+    try {
+      const { meta } = await yahooChart(sym, '5d', '1d');
+      if (meta.currency === 'EUR' && meta.price && plausible(meta.price)) return { source: 'yahoo', symbol: sym, yahoo: sym, currency: 'EUR' };
+    } catch { /* try the next listing */ }
+  }
+  // Last resort: a listing in another currency (e.g. Cameco only on Toronto, in CAD), converted with live FX
+  for (const q of quotes) {
+    try {
+      const { meta } = await yahooChart(q.symbol, '5d', '1d');
+      const ccy = meta.currency;
+      if (!meta.price || !/^[A-Z]{3}$/.test(ccy || '')) continue; // skips minor units such as GBp
+      const rate = ccy === 'EUR' ? 1 : +(await twelve('quote', { symbol: `EUR/${ccy}` })).close;
+      if (rate && plausible(meta.price / rate)) return { source: 'yahoo', symbol: q.symbol, yahoo: q.symbol, currency: ccy };
+    } catch { /* try the next listing */ }
+  }
+  return null;
+}
+
+// ---------- FX (Twelve Data forex is free)
+
+// Units of `base` per 1 unit of `ccy`, e.g. fxRate('USD', 'EUR') ~ 0.86
+export function fxRate(ccy, base) {
+  if (!ccy || !base || ccy === base) return 1;
+  const r = cache.fx[`${base}/${ccy}`];
+  return r ? 1 / r.rate : null;
+}
+
+async function refreshFx(currencies, base, force) {
+  for (const ccy of currencies) {
+    if (ccy === base) continue;
+    const pair = `${base}/${ccy}`;
+    if (!force && !stale(cache.fx[pair], TTL.quote)) continue;
+    const d = await twelve('quote', { symbol: pair });
+    cache.fx[pair] = { rate: +d.close, ts: Date.now() };
+  }
+}
+
+// Daily `${base}/${ccy}` closes keyed by date, for converting historical trades
+export async function fxHistory(base, ccy, days = 1200) {
+  const d = await twelve('time_series', { symbol: `${base}/${ccy}`, interval: '1day', outputsize: Math.min(days, 5000) });
+  return Object.fromEntries((d.values || []).map((v) => [v.datetime.slice(0, 10), +v.close]));
 }
 
 // ---------- CoinGecko (public API, no key)
@@ -139,11 +232,14 @@ async function run(list, fn, onUpdate) {
   }
 }
 
-export async function refreshAll(assets, { force = false, onUpdate } = {}) {
+export async function refreshAll(assets, { force = false, onUpdate, base = 'USD' } = {}) {
+  assets = assets.filter((a) => !a.archived);
   const crypto = assets.filter((a) => a.source === 'coingecko');
-  const jobs = [];
+  const currencies = new Set(assets.map((a) => a.currency || 'USD'));
+  const jobs = [refreshFx(currencies, base, force).catch(() => {}).finally(() => { persist(); onUpdate?.(); })];
   if (crypto.length) jobs.push(run(crypto, () => refreshCrypto(crypto, force), onUpdate));
   for (const a of assets.filter((x) => x.source === 'twelve')) jobs.push(run([a], () => refreshTwelve(a, force), onUpdate));
+  for (const a of assets.filter((x) => x.source === 'yahoo')) jobs.push(run([a], () => refreshYahoo(a, force), onUpdate));
   await Promise.allSettled(jobs);
 }
 
@@ -155,6 +251,9 @@ export async function getSeries(asset, days = 200) {
   if (asset.source === 'coingecko') {
     const d = await gecko(`coins/${asset.cgId}/market_chart`, { vs_currency: 'usd', days, interval: 'daily' });
     points = (d.prices || []).map(([t, p]) => ({ date: new Date(t).toISOString().slice(0, 10), close: p }));
+  } else if (asset.source === 'yahoo') {
+    const { points: p } = await yahooChart(asset.yahoo, '1y', '1d');
+    points = p.filter((x) => x.close).map((x) => ({ date: new Date(x.t * 1000).toISOString().slice(0, 10), close: x.close })).slice(-days);
   } else {
     const d = await twelve('time_series', { symbol: asset.symbol, interval: '1day', outputsize: days });
     points = (d.values || []).map((v) => ({ date: v.datetime.slice(0, 10), close: +v.close })).reverse();
