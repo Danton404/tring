@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>TRING</title>
+  <meta name="description" content="TRING (Trading + Thinking): track assets against their all-time highs, your portfolio and DCA plans, with AI analysis.">
+  <meta name="theme-color" content="#f8f8f6" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#151619" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="TRING">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <div class="app">
+    <nav id="nav" class="nav" aria-label="Main"></nav>
+    <div class="main">
+      <header class="topbar">
+        <h1 id="view-title">Markets</h1>
+        <div class="topbar-actions">
+          <span id="sync-status" class="sync-pill" hidden></span>
+          <button id="refresh-btn" class="icon-btn" type="button" aria-label="Refresh prices"></button>
+        </div>
+      </header>
+      <main id="view"></main>
+    </div>
+  </div>
+  <div id="gate" class="gate" hidden></div>
+  <div id="toasts" class="toasts"></div>
+  <dialog id="sheet" class="sheet" aria-label="Panel"></dialog>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
