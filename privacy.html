@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TRING · Privacy</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <style>
+    :root { --bg: #f8f8f6; --text: #26272b; --muted: #61646c; --accent: #1f8a78; color-scheme: light dark; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #151619; --text: #ececee; --muted: #a3a6ad; --accent: #4fc4ae; } }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 Inter, system-ui, -apple-system, sans-serif; }
+    main { max-width: 680px; margin: 0 auto; padding: 40px 16px 64px; }
+    h1 { font-size: 28px; margin: 0 0 4px; }
+    h2 { font-size: 18px; margin: 28px 0 8px; }
+    p, li { color: var(--text); }
+    .muted { color: var(--muted); font-size: 14px; }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>TRING privacy policy</h1>
+    <p class="muted">Last updated 7 October 2026</p>
+
+    <p>TRING (Trading + Thinking) is a private, invite-only app for tracking investments. This page explains what it stores and why.</p>
+
+    <h2>What we collect</h2>
+    <ul>
+      <li><strong>Your Google account email and name</strong>, received when you sign in with Google. They are used only to identify you and check that you have been invited.</li>
+      <li><strong>What you enter in the app</strong>: the assets you follow, transactions, investment plans and daily portfolio snapshots.</li>
+      <li><strong>AI usage counts</strong>: how many AI requests you made each day, to apply the daily limit.</li>
+    </ul>
+
+    <h2>How it is used</h2>
+    <ul>
+      <li>Your data is stored in a Supabase database and is visible only to your own account.</li>
+      <li>When you use the AI features, your question and the relevant app data (assets, holdings, plans) are sent to the AI provider you choose (Anthropic, OpenAI, Google or DeepSeek) to produce the answer.</li>
+      <li>Market prices are fetched from Twelve Data and CoinGecko. No personal data is sent to them.</li>
+      <li>Your data is never sold or used for advertising.</li>
+    </ul>
+
+    <h2>Deleting your data</h2>
+    <p>Ask the app owner to delete your account and everything stored with it. You can also export your data at any time from Settings.</p>
+
+    <h2>Not investment advice</h2>
+    <p>TRING is a research and tracking tool. Nothing in it, including AI output, is investment advice.</p>
+
+    <h2>Contact</h2>
+    <p>Questions or deletion requests: contact the person who invited you to TRING.</p>
+
+    <p class="muted"><a href="./">Back to TRING</a></p>
+  </main>
+</body>
+</html>
