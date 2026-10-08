@@ -5,6 +5,7 @@ import { holdings, planSummary, indicators } from './calc.js';
 import { parseCsv, isT212, summarize, buildTransactions } from './importer.js';
 import { portfolioHistory } from './history.js';
 import { ask, PROVIDERS, modelFor, availableProviders, activeProvider } from './ai.js';
+import { initFx, magicRings } from './fx.js';
 import {
   $, $$, esc, icon, fmtMoney, fmtSignedMoney, fmtPct, fmtNum, fmtDate, todayISO, tone,
   toast, openSheet, donut, lineChart, bindScrub, bigMoney, countUp, colorAt, md,
@@ -47,6 +48,42 @@ const round = (n, d = 2) => Math.round(n * 10 ** d) / 10 ** d;
 
 function buildNav() {
   $('#nav').innerHTML = TABS.map((t) => `<a href="#${t.id}" data-tab="${t.id}">${icon(t.icon, 22)}<span>${t.label}</span></a>`).join('');
+}
+
+// Quick actions menu (after React Bits' Card Nav)
+const QUICK = [
+  { label: 'Portfolio', tone: 'a', links: [['Log transaction', 'add-tx'], ['Import from Trading 212', 'import-t212'], ['Cash on hand', 'cash']] },
+  { label: 'Markets', tone: 'b', links: [['Add asset', 'add-asset', 'markets'], ['Refresh prices', 'refresh'], ['New plan', 'new-plan', 'plan']] },
+  { label: 'More', tone: 'c', links: [['Review portfolio with AI', 'ai-portfolio', 'ai'], ['Export backup', 'export'], ['Settings', '', 'settings']] },
+];
+function buildCardNav() {
+  const nav = $('#cardnav'), btn = $('#menu-btn');
+  nav.innerHTML = `<div class="cardnav-inner">${QUICK.map((c, i) => `
+    <section class="cn-card cn-${c.tone}" style="--i:${i}"><h2 class="cn-label">${c.label}</h2>
+      ${c.links.map(([l, act, tab]) => `<button type="button" class="cn-link" data-qa="${act}" data-tab="${tab || ''}">${icon('arrowUpRight', 16)}${l}</button>`).join('')}
+    </section>`).join('')}</div>`;
+  const set = (open) => {
+    btn.setAttribute('aria-expanded', String(open));
+    btn.classList.toggle('open', open);
+    if (open) { nav.hidden = false; requestAnimationFrame(() => nav.classList.add('open')); }
+    else { nav.classList.remove('open'); setTimeout(() => { if (!nav.classList.contains('open')) nav.hidden = true; }, 260); }
+  };
+  btn.onclick = () => set(btn.getAttribute('aria-expanded') !== 'true');
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !nav.hidden) { set(false); btn.focus(); } });
+  document.addEventListener('pointerdown', (e) => { if (!nav.hidden && !nav.contains(e.target) && !btn.contains(e.target)) set(false); });
+  nav.onclick = async (e) => {
+    const b = e.target.closest('.cn-link');
+    if (!b) return;
+    set(false);
+    const { qa, tab } = b.dataset;
+    if (tab && ui.tab !== tab) {
+      const shown = new Promise((res) => addEventListener('hashchange', res, { once: true }));
+      location.hash = tab;
+      await shown;
+    }
+    if (qa === 'refresh') refresh(true);
+    else if (qa) ACTIONS[qa]?.();
+  };
 }
 
 function route() {
@@ -1171,7 +1208,8 @@ function renderChat() {
   const log = $('#chat-log');
   if (!log) return;
   if (!chat.length && !ui.busy) {
-    log.innerHTML = `<div class="chat-empty"><h2>Ask TRING</h2><p class="muted">It sees your assets, holdings and plans.</p></div>`;
+    log.innerHTML = `<div class="chat-empty"><canvas class="rings" aria-hidden="true"></canvas><h2>Ask TRING</h2><p class="muted">It sees your assets, holdings and plans.</p></div>`;
+    magicRings($('.rings', log));
     return;
   }
   log.innerHTML = chat.map((m) => {
@@ -1181,8 +1219,10 @@ function renderChat() {
       ? `<details class="sources"><summary>${m.sources.length} sources</summary><ol>${m.sources.map((s) => `<li><a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(s.title)}</a></li>`).join('')}</ol></details>` : '';
     return `<div class="msg ai"><div class="msg-meta small muted">${esc(PROVIDERS[m.provider]?.label || 'AI')}</div><div class="prose">${md(m.content)}</div>${src}</div>`;
   }).join('') +
-    (ui.busy ? `<div class="msg ai"><div class="skeleton" style="height:14px;width:60%"></div><div class="skeleton" style="height:14px;width:85%;margin-top:8px"></div><div class="skeleton" style="height:14px;width:40%;margin-top:8px"></div></div>` : '') +
+    (ui.busy ? `<div class="msg ai thinking"><canvas class="rings small" aria-hidden="true"></canvas><div class="skeleton" style="height:14px;width:60%"></div><div class="skeleton" style="height:14px;width:85%;margin-top:8px"></div><div class="skeleton" style="height:14px;width:40%;margin-top:8px"></div></div>` : '') +
     (chat.length && !ui.busy ? `<div class="chat-foot"><button class="btn ghost small" type="button" data-act="clear-chat">Clear conversation</button></div>` : '');
+  const busyRings = $('.rings.small', log);
+  if (busyRings) magicRings(busyRings, { count: 4, speed: 2.2, glow: 6 });
   log.lastElementChild?.scrollIntoView({ block: 'nearest' });
 }
 
@@ -1301,6 +1341,10 @@ function renderSettings(el) {
   };
   const dataCard = `
     <section class="card form">
+      <h2>Display</h2>
+      <label class="check"><input type="checkbox" id="s-motion"${st.motionFx !== false ? ' checked' : ''}><span>Light effects (follow the mouse, or tilt on phones)</span></label>
+    </section>
+    <section class="card form">
       <h2>Data</h2>
       <div class="btn-row">
         <button class="btn" type="button" data-act="export">${icon('download', 18)}Export</button>
@@ -1353,6 +1397,7 @@ function renderSettings(el) {
   bind('s-claude-ws', (v) => store.setSettings({ claudeWorkspace: v }));
   bind('s-sync-url', (v) => { store.setSettings({ syncUrl: v }); pull(); });
   bind('s-sync-token', (v) => { store.setSettings({ syncToken: v }); pull(); });
+  $('#s-motion', el).onchange = (e) => store.setSettings({ motionFx: e.target.checked });
   $('#import-file', el).onchange = importData;
 }
 
@@ -1464,9 +1509,10 @@ function showGate(html) {
   $('.app').hidden = true;
   const g = $('#gate');
   g.hidden = false;
-  g.innerHTML = `<div class="gate-card card">
+  g.innerHTML = `<canvas class="rings gate-rings" aria-hidden="true"></canvas><div class="gate-card card">
     <div class="gate-brand"><img src="icon.svg" width="56" height="56" alt=""><h1>TRING</h1></div>
     ${html}</div>`;
+  magicRings($('.gate-rings', g), { opacity: 0.55, speed: 0.6 });
 }
 
 function showLogin(error = '') {
@@ -1489,6 +1535,7 @@ function showNoAccess() {
 }
 
 async function boot() {
+  initFx();
   if (hosted) {
     try {
       await initAuth();
@@ -1502,6 +1549,7 @@ async function boot() {
   }
 
   buildNav();
+  buildCardNav();
   $('#refresh-btn').innerHTML = icon('refresh');
   $('#refresh-btn').onclick = () => refresh(true);
   store.subscribe((reason) => {

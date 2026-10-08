@@ -66,6 +66,7 @@ const ICONS = {
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/>',
   search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
   banknote: '<rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01M18 12h.01"/>',
+  arrowUpRight: '<path d="M7 7h10v10"/><path d="M7 17 17 7"/>',
   chevron: '<path d="m9 18 6-6-6-6"/>',
   upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/>',
 };
