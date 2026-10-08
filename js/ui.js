@@ -77,7 +77,7 @@ export const icon = (name, size = 20) =>
 // ---------- Category colours (consistent per asset across charts)
 
 const PALETTE = [
-  'oklch(0.66 0.14 245)', 'oklch(0.75 0.14 75)', 'oklch(0.66 0.11 195)', 'oklch(0.63 0.17 15)',
+  'oklch(0.66 0.14 245)', 'oklch(0.75 0.14 75)', 'oklch(0.66 0.11 175)', 'oklch(0.63 0.17 15)',
   'oklch(0.6 0.15 300)', 'oklch(0.7 0.15 135)', 'oklch(0.68 0.15 45)', 'oklch(0.6 0.03 260)',
 ];
 export const colorAt = (i) => PALETTE[((i % PALETTE.length) + PALETTE.length) % PALETTE.length];

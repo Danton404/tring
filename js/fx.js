@@ -1,14 +1,10 @@
-// Visual effects, ported from React Bits to vanilla JS:
-// - Spotlight Card (panels), Specular Button (primary buttons), Magic Bento (P&L tiles): one shared light.
-//   With a mouse the light follows the pointer; on phones it follows device tilt and only shows while
-//   the phone is moving, so nothing depends on hover.
-// - Glass Surface: the tab bar's edge catches the same light (the glass itself is CSS).
-// - Magic Rings: canvas rings for the AI and sign-in screens.
+// Spotlight Card (after React Bits): a faint light on panel edges. With a mouse it follows the
+// pointer; on phones it follows device tilt and only shows while the phone is moving.
 import { store } from './store.js';
 
 const reduce = matchMedia('(prefers-reduced-motion: reduce)');
 const mouse = matchMedia('(hover: hover) and (pointer: fine)');
-const SURFACES = '.card:not(.no-fx), .panel:not(.no-fx), .btn.primary, .pnl, .nav';
+const SURFACES = '.card:not(.no-fx), .panel:not(.no-fx)';
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 
 export const fxEnabled = () => store.settings.motionFx !== false && !reduce.matches;
@@ -94,82 +90,7 @@ function initTilt() {
   }
 }
 
-// ---------- Magic Bento tap: ripple plus a few sparks
-
-function initBento() {
-  document.addEventListener('pointerdown', (e) => {
-    const tile = e.target.closest?.('.pnl');
-    if (!tile || !fxEnabled()) return;
-    const r = tile.getBoundingClientRect();
-    const x = e.clientX - r.left, y = e.clientY - r.top;
-    const size = 2 * Math.hypot(Math.max(x, r.width - x), Math.max(y, r.height - y));
-    const ripple = document.createElement('span');
-    ripple.className = 'fx-ripple';
-    ripple.style.cssText = `left:${x}px;top:${y}px;width:${size}px;height:${size}px`;
-    tile.append(ripple);
-    ripple.addEventListener('animationend', () => ripple.remove());
-    for (let i = 0; i < 6; i++) {
-      const a = (i / 6) * Math.PI * 2 + Math.random() * 0.6, d = 18 + Math.random() * 16;
-      const s = document.createElement('span');
-      s.className = 'fx-spark';
-      s.style.cssText = `left:${x}px;top:${y}px;--dx:${(Math.cos(a) * d).toFixed(1)}px;--dy:${(Math.sin(a) * d).toFixed(1)}px`;
-      tile.append(s);
-      s.addEventListener('animationend', () => s.remove());
-    }
-  });
-}
-
-// ---------- Magic Rings (canvas): expanding rings that fade in and out, with a slight wobble
-
-const RING_COLORS = [[56, 189, 248], [99, 132, 255]]; // sky to blue
-export function magicRings(canvas, { count = 5, speed = 1, thickness = 1.5, base = 0.2, noise = 0.1, glow = 8, opacity = 0.9 } = {}) {
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return;
-  let visible = true, t0 = performance.now(), id = 0;
-  const io = new IntersectionObserver(([e]) => { visible = e.isIntersecting; if (visible) loop(); });
-  io.observe(canvas);
-  const draw = (t) => {
-    const dpr = Math.min(2, devicePixelRatio || 1);
-    const w = canvas.clientWidth, h = canvas.clientHeight;
-    if (canvas.width !== Math.round(w * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, w, h);
-    const R = Math.min(w, h) / 2;
-    // Parallax toward the shared light (mouse or tilt)
-    const cx = w / 2 + (light.on ? clamp((light.x - canvas.getBoundingClientRect().left - w / 2) * 0.05, -12, 12) : 0);
-    const cy = h / 2 + (light.on ? clamp((light.y - canvas.getBoundingClientRect().top - h / 2) * 0.05, -12, 12) : 0);
-    ctx.lineWidth = thickness;
-    ctx.shadowBlur = glow;
-    for (let i = 0; i < count; i++) {
-      const p = (t * speed * 0.12 + i / count) % 1;
-      const alpha = opacity * Math.min(1, p / 0.25, (1 - p) / 0.5);
-      const c = RING_COLORS[0].map((v, k) => Math.round(v + (RING_COLORS[1][k] - v) * p));
-      ctx.strokeStyle = ctx.shadowColor = `rgba(${c.join(',')},${alpha.toFixed(3)})`;
-      const r = R * (base + p * (1 - base)) * 0.95;
-      ctx.beginPath();
-      for (let a = 0; a <= 64; a++) {
-        const th = (a / 64) * Math.PI * 2;
-        const rr = r * (1 + noise * 0.12 * Math.sin(th * 3 + t * 1.3 + i * 1.7));
-        a ? ctx.lineTo(cx + rr * Math.cos(th), cy + rr * Math.sin(th)) : ctx.moveTo(cx + rr * Math.cos(th), cy + rr * Math.sin(th));
-      }
-      ctx.stroke();
-    }
-  };
-  function loop() {
-    cancelAnimationFrame(id);
-    const tick = (now) => {
-      if (!canvas.isConnected) { io.disconnect(); return; }
-      draw((now - t0) / 1000);
-      if (visible && !reduce.matches && document.visibilityState === 'visible') id = requestAnimationFrame(tick);
-    };
-    id = requestAnimationFrame(tick);
-  }
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && canvas.isConnected) loop(); });
-  loop();
-}
-
 export function initFx() {
   if (mouse.matches) initMouse(); else initTilt();
-  initBento();
   store.subscribe((r) => { if (r === 'settings' && !fxEnabled()) { light.ton = 0; light.energy = 0; wake(); } });
 }

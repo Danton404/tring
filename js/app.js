@@ -5,7 +5,7 @@ import { holdings, planSummary, indicators } from './calc.js';
 import { parseCsv, isT212, summarize, buildTransactions } from './importer.js';
 import { portfolioHistory, cachedHistory } from './history.js';
 import { ask, PROVIDERS, modelFor, availableProviders, activeProvider } from './ai.js';
-import { initFx, magicRings } from './fx.js';
+import { initFx } from './fx.js';
 import {
   $, $$, esc, icon, fmtMoney, fmtSignedMoney, fmtPct, fmtNum, fmtDate, todayISO, tone,
   toast, openSheet, donut, lineChart, bindScrub, bigMoney, countUp, colorAt, md,
@@ -543,7 +543,7 @@ function renderPerf() {
   }
   const first = pts[0], last = pts[pts.length - 1];
   const rest = gainBetween(first, last);
-  const color = rest.gain >= 0 ? 'var(--accent)' : 'var(--danger)';
+  const color = rest.gain >= 0 ? 'var(--success)' : 'var(--danger)';
   const chart = lineChart([
     { values: pts.map((p) => p.value), color, fill: true },
     { values: pts.map((p) => p.invested), color: 'var(--muted)', dash: true },
@@ -637,7 +637,7 @@ function openAsset(id) {
       if (price != null && pts.length && pts[pts.length - 1].date < todayISO()) pts = [...pts, { date: todayISO(), close: price }];
       if (pts.length < 2) { box.innerHTML = '<p class="muted small chart-empty">Not enough history.</p>'; return; }
       const f0 = pts[0].close, lastPx = pts[pts.length - 1].close;
-      const color = lastPx >= f0 ? 'var(--accent)' : 'var(--danger)';
+      const color = lastPx >= f0 ? 'var(--success)' : 'var(--danger)';
       const avgLocal = h && market.fxRate(ccy, base()) ? h.avg / market.fxRate(ccy, base()) : null;
       const closes = pts.map((p) => p.close);
       // Draw the average-price line only when it doesn't flatten the price line
@@ -1213,8 +1213,7 @@ function renderChat() {
   const log = $('#chat-log');
   if (!log) return;
   if (!chat.length && !ui.busy) {
-    log.innerHTML = `<div class="chat-empty"><canvas class="rings" aria-hidden="true"></canvas><h2>Ask TRING</h2><p class="muted">It sees your assets, holdings and plans.</p></div>`;
-    magicRings($('.rings', log));
+    log.innerHTML = `<div class="chat-empty"><h2>Ask TRING</h2><p class="muted">It sees your assets, holdings and plans.</p></div>`;
     return;
   }
   log.innerHTML = chat.map((m) => {
@@ -1224,10 +1223,8 @@ function renderChat() {
       ? `<details class="sources"><summary>${m.sources.length} sources</summary><ol>${m.sources.map((s) => `<li><a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(s.title)}</a></li>`).join('')}</ol></details>` : '';
     return `<div class="msg ai"><div class="msg-meta small muted">${esc(PROVIDERS[m.provider]?.label || 'AI')}</div><div class="prose">${md(m.content)}</div>${src}</div>`;
   }).join('') +
-    (ui.busy ? `<div class="msg ai thinking"><canvas class="rings small" aria-hidden="true"></canvas><div class="skeleton" style="height:14px;width:60%"></div><div class="skeleton" style="height:14px;width:85%;margin-top:8px"></div><div class="skeleton" style="height:14px;width:40%;margin-top:8px"></div></div>` : '') +
+    (ui.busy ? `<div class="msg ai"><div class="skeleton" style="height:14px;width:60%"></div><div class="skeleton" style="height:14px;width:85%;margin-top:8px"></div><div class="skeleton" style="height:14px;width:40%;margin-top:8px"></div></div>` : '') +
     (chat.length && !ui.busy ? `<div class="chat-foot"><button class="btn ghost small" type="button" data-act="clear-chat">Clear conversation</button></div>` : '');
-  const busyRings = $('.rings.small', log);
-  if (busyRings) magicRings(busyRings, { count: 4, speed: 2.2, glow: 6 });
   log.lastElementChild?.scrollIntoView({ block: 'nearest' });
 }
 
@@ -1514,10 +1511,9 @@ function showGate(html) {
   $('.app').hidden = true;
   const g = $('#gate');
   g.hidden = false;
-  g.innerHTML = `<canvas class="rings gate-rings" aria-hidden="true"></canvas><div class="gate-card card">
+  g.innerHTML = `<div class="gate-card card">
     <div class="gate-brand"><img src="icon.svg" width="56" height="56" alt=""><h1>TRING</h1></div>
     ${html}</div>`;
-  magicRings($('.gate-rings', g), { opacity: 0.55, speed: 0.6 });
 }
 
 function showLogin(error = '') {

@@ -1,25 +1,24 @@
 /* TRING design tokens */
 :root {
   --fx-light: oklch(0.2 0.01 260);
-  --fx-fill: 0.05;
-  --fx-edge: 0.35;
-  --bg: oklch(0.965 0.008 255);
-  --surface: oklch(0.995 0.003 255);
-  --surface-2: oklch(0.955 0.01 255);
-  --surface-3: oklch(0.925 0.013 255);
-  --text: oklch(0.2 0.02 260);
-  --muted: oklch(0.5 0.025 258);
-  --border: oklch(0.9 0.013 255);
-  --grid: oklch(0.2 0.02 260 / 0.06);
-  --accent: oklch(0.55 0.17 258);
+  --fx-fill: 0.03;
+  --fx-edge: 0.25;
+  --bg: oklch(0.965 0.002 260);
+  --surface: oklch(0.995 0 0);
+  --surface-2: oklch(0.955 0.003 260);
+  --surface-3: oklch(0.925 0.004 260);
+  --text: oklch(0.2 0.006 260);
+  --muted: oklch(0.5 0.008 260);
+  --border: oklch(0.9 0.004 260);
+  --grid: oklch(0.2 0.006 260 / 0.06);
+  --accent: oklch(0.56 0.16 248);
   --accent-ink: oklch(0.99 0 0);
-  --accent-soft: oklch(0.94 0.035 255);
+  --accent-soft: oklch(0.94 0.03 248);
   --success: oklch(0.52 0.14 152);
   --danger: oklch(0.55 0.2 15);
   --warning: oklch(0.55 0.13 70);
   --highlight: inset 0 1px 0 oklch(1 0 0 / 0.7);
   --shadow: 0 1px 2px oklch(0.2 0 0 / 0.04), 0 6px 20px oklch(0.2 0 0 / 0.05);
-  --grain: 0.035;
   --r-sm: 8px;
   --r-md: 12px;
   --r-lg: 16px;
@@ -27,26 +26,25 @@
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: oklch(0.14 0.014 258);
-    --surface: oklch(0.19 0.018 258);
-    --surface-2: oklch(0.23 0.021 258);
-    --surface-3: oklch(0.27 0.024 258);
-    --text: oklch(0.95 0.008 255);
-    --muted: oklch(0.7 0.03 255);
-    --border: oklch(0.29 0.024 258);
-    --grid: oklch(0.8 0.05 255 / 0.06);
-    --accent: oklch(0.72 0.15 252);
-    --accent-ink: oklch(0.16 0.04 258);
-    --accent-soft: oklch(0.3 0.07 258);
+    --bg: oklch(0.135 0.003 260);
+    --surface: oklch(0.185 0.004 260);
+    --surface-2: oklch(0.225 0.005 260);
+    --surface-3: oklch(0.265 0.006 260);
+    --text: oklch(0.95 0.003 260);
+    --muted: oklch(0.68 0.008 260);
+    --border: oklch(0.27 0.006 260);
+    --grid: oklch(1 0 0 / 0.05);
+    --accent: oklch(0.7 0.15 245);
+    --accent-ink: oklch(0.15 0.02 250);
+    --accent-soft: oklch(0.28 0.06 250);
     --success: oklch(0.78 0.16 152);
     --danger: oklch(0.7 0.19 5);
     --warning: oklch(0.8 0.13 80);
     --highlight: inset 0 1px 0 oklch(1 0 0 / 0.045);
     --shadow: 0 1px 0 oklch(0 0 0 / 0.3), 0 10px 30px oklch(0 0 0 / 0.25);
-    --grain: 0.06;
     --fx-light: oklch(1 0 0);
-    --fx-fill: 0.07;
-    --fx-edge: 0.55;
+    --fx-fill: 0.04;
+    --fx-edge: 0.35;
     color-scheme: dark;
   }
 }
@@ -59,11 +57,6 @@ body {
   color: var(--text);
   font: 16px/1.5 Inter, system-ui, -apple-system, 'Segoe UI', sans-serif;
   -webkit-font-smoothing: antialiased;
-}
-/* Film grain over the whole layout (after React Bits' Noise) */
-body::after {
-  content: ''; position: fixed; inset: 0; z-index: 100; pointer-events: none; opacity: var(--grain);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 h1, h2, h3, h4 { margin: 0; line-height: 1.25; }
 h1 { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; }
@@ -91,9 +84,9 @@ a { color: var(--accent); }
   width: min(480px, calc(100% - 24px));
   display: flex; justify-content: space-around; gap: 2px; padding: 6px;
   border-radius: 22px; border: 1px solid var(--border);
-  background: color-mix(in oklch, var(--surface) 78%, transparent);
-  backdrop-filter: blur(20px) saturate(1.4); -webkit-backdrop-filter: blur(20px) saturate(1.4);
-  box-shadow: var(--highlight), 0 10px 30px oklch(0 0 0 / 0.22);
+  background: color-mix(in oklch, var(--surface) 88%, transparent);
+  backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 8px 24px oklch(0 0 0 / 0.25);
 }
 .nav a {
   flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
@@ -298,7 +291,7 @@ tbody tr:last-child td { border-bottom: 0; }
 .tx-panel { grid-area: tx; }
 @media (min-width: 1000px) {
   .port { grid-template-columns: 400px minmax(0, 1fr); grid-template-areas: 'hold perf' 'hold returns' 'hold breakdown' 'hold alloc' 'tx tx'; align-items: start; }
-  .holdings-panel { position: sticky; top: 80px; max-height: calc(100dvh - 200px); display: flex; flex-direction: column; }
+  .holdings-panel { max-height: calc(100dvh - 180px); display: flex; flex-direction: column; }
   .holdings-panel .hold-list { overflow-y: auto; margin: 0 -12px; padding: 0 12px; }
 }
 .perf { position: relative; }
@@ -469,55 +462,6 @@ p.warn { color: var(--warning); }
   background: radial-gradient(180px circle at var(--fx-x, 50%) var(--fx-y, 50%), color-mix(in oklch, var(--fx-light) calc(var(--fx-edge) * 100%), transparent), transparent 70%);
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude;
 }
-/* Specular Button: a thin highlight that slides along the edge */
-.btn.primary { position: relative; isolation: isolate; }
-.btn.primary::after {
-  content: ''; position: absolute; inset: -1px; padding: 1px; border-radius: inherit; pointer-events: none;
-  opacity: var(--fx-o, 0);
-  background: radial-gradient(48px circle at var(--fx-x, 50%) var(--fx-y, 50%), oklch(1 0 0 / 0.95), oklch(1 0 0 / 0.25) 40%, transparent 70%);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude;
-}
-/* Magic Bento: accent border glow per tile, ripple and sparks on tap */
-.pnl { position: relative; overflow: hidden; isolation: isolate; }
-.pnl::after {
-  content: ''; position: absolute; inset: 0; pointer-events: none; z-index: -1; opacity: var(--fx-o, 0);
-  background: radial-gradient(140px circle at var(--fx-x, 50%) var(--fx-y, 50%), color-mix(in oklch, var(--accent) 16%, transparent), transparent 70%);
-  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--accent) calc(var(--fx-o, 0) * 45%), transparent);
-}
-.fx-ripple { position: absolute; z-index: -1; border-radius: 50%; transform: translate(-50%, -50%) scale(0); background: radial-gradient(circle, color-mix(in oklch, var(--accent) 22%, transparent), transparent 70%); pointer-events: none; animation: fx-ripple 650ms ease-out forwards; }
-@keyframes fx-ripple { to { transform: translate(-50%, -50%) scale(1); opacity: 0; } }
-.fx-spark { position: absolute; width: 4px; height: 4px; margin: -2px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 6px var(--accent); pointer-events: none; animation: fx-spark 600ms ease-out forwards; }
-@keyframes fx-spark { to { transform: translate(var(--dx), var(--dy)) scale(0.2); opacity: 0; } }
-
-/* Glass Surface: frosted tab bar with a specular sheen; its rim catches the shared light */
-.nav {
-  background: linear-gradient(180deg, color-mix(in oklch, var(--surface) 62%, transparent), color-mix(in oklch, var(--surface) 42%, transparent));
-  backdrop-filter: blur(24px) saturate(1.8) brightness(1.04); -webkit-backdrop-filter: blur(24px) saturate(1.8) brightness(1.04);
-  border-color: color-mix(in oklch, var(--fx-light) 10%, transparent);
-  box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.14), inset 0 -1px 0 oklch(0 0 0 / 0.18), 0 12px 32px oklch(0 0 0 / 0.3);
-}
-.nav::before {
-  content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
-  background: linear-gradient(180deg, oklch(1 0 0 / 0.09), transparent 55%);
-}
-.nav::after {
-  content: ''; position: absolute; inset: -1px; padding: 1px; border-radius: inherit; pointer-events: none;
-  opacity: var(--fx-o, 0);
-  background: radial-gradient(90px circle at var(--fx-x, 50%) var(--fx-y, 50%), oklch(1 0 0 / 0.8), transparent 70%);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude;
-}
-.nav a { position: relative; z-index: 1; }
-
-/* Magic Rings */
-.rings { display: block; width: 100%; height: 180px; margin-bottom: 4px; }
-.chat-empty { align-items: center; text-align: center; max-width: none; }
-.chat-empty p { max-width: 40ch; }
-.msg.thinking { display: flex; flex-direction: column; gap: 8px; }
-.rings.small { width: 44px; height: 44px; margin: 0; }
-.gate { position: relative; }
-.gate-rings { position: fixed; inset: 0; width: 100%; height: 100%; margin: 0; pointer-events: none; }
-.gate-card { position: relative; }
-
 /* ---------- Card Nav (quick actions) */
 .menu-btn { position: relative; width: 44px; height: 44px; flex: none; border: 0; border-radius: 999px; background: transparent; cursor: pointer; }
 .menu-btn span { position: absolute; left: 13px; right: 13px; height: 2px; border-radius: 2px; background: var(--text); transition: transform 220ms ease-out, top 220ms ease-out; }
@@ -548,50 +492,13 @@ p.warn { color: var(--warning); }
   .cn-label { width: 100%; font-size: 17px; margin-bottom: 0; }
 }
 
-/* ---------- Glass (after React Bits' Glass Surface) on everything that floats over content */
-:root {
-  --glass-bg: linear-gradient(180deg, oklch(1 0 0 / 0.6), oklch(1 0 0 / 0.4));
-  --glass-border: oklch(1 0 0 / 0.7);
-  --glass-shadow:
-    inset 0 1px 0 oklch(1 0 0 / 0.8), inset 0 -1px 0 oklch(1 0 0 / 0.35),
-    0 0 2px 1px oklch(0.25 0.05 260 / 0.06) inset, 0 0 10px 4px oklch(0.25 0.05 260 / 0.04) inset,
-    0 8px 32px oklch(0.35 0.12 262 / 0.16), 0 2px 12px oklch(0.35 0.12 262 / 0.08);
-  --glass-filter: blur(16px) saturate(1.8) brightness(1.08);
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --glass-bg: linear-gradient(180deg, oklch(0.7 0.06 255 / 0.16), oklch(0.5 0.05 258 / 0.08));
-    --glass-border: oklch(0.85 0.05 255 / 0.18);
-    --glass-shadow:
-      inset 0 1px 0 oklch(1 0 0 / 0.2), inset 0 -1px 0 oklch(1 0 0 / 0.07),
-      0 0 2px 1px oklch(1 0 0 / 0.07) inset, 0 0 10px 4px oklch(0.8 0.08 255 / 0.05) inset,
-      0 12px 36px oklch(0.05 0.03 260 / 0.55);
-    --glass-filter: blur(18px) saturate(1.8) brightness(1.15);
-  }
-}
-.nav, .composer, .toast, dialog.sheet, body.scrolled .topbar {
-  background: var(--glass-bg);
-  border: 1px solid var(--glass-border);
-  box-shadow: var(--glass-shadow);
-  backdrop-filter: var(--glass-filter); -webkit-backdrop-filter: var(--glass-filter);
-}
-.nav::before { background: linear-gradient(180deg, oklch(1 0 0 / 0.1), transparent 50%); }
-.toast { color: var(--text); }
-.toast.error { background: color-mix(in oklch, var(--danger) 80%, transparent); color: oklch(0.99 0 0); }
-dialog.sheet { background: var(--glass-bg), color-mix(in oklch, var(--surface) 82%, transparent); }
-dialog.sheet .detail-actions { background: transparent; }
-dialog.sheet::backdrop { background: oklch(0.1 0.03 260 / 0.45); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
-.composer textarea { background: transparent; }
-
-/* Top bar turns into a floating glass pill once the page scrolls */
-.topbar { position: sticky; top: 0; z-index: 15; border: 1px solid transparent; border-radius: 22px; transition: padding 200ms ease-out, margin 200ms ease-out, background-color 200ms ease-out; }
-body.scrolled .topbar { top: calc(8px + env(safe-area-inset-top)); padding: 6px 8px 6px 16px; margin-top: 8px; margin-bottom: 8px; }
-body.scrolled .topbar h1 { font-size: 18px; }
-.cardnav { position: sticky; top: calc(76px + env(safe-area-inset-top)); z-index: 14; }
-body.scrolled .cn-card { background: var(--glass-bg), color-mix(in oklch, var(--surface) 85%, transparent); backdrop-filter: var(--glass-filter); -webkit-backdrop-filter: var(--glass-filter); border-color: var(--glass-border); }
-
 /* Header split: investments and cash */
 .perf-split { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 6px; color: var(--muted); font-weight: 500; }
 .perf-split > * { display: inline-flex; align-items: center; gap: 6px; }
 .perf-split .link-btn { text-decoration: none; color: inherit; min-height: 24px; }
 .sw-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+
+/* Sticky top bar: page background behind it once the page scrolls */
+.topbar { position: sticky; top: 0; z-index: 15; transition: box-shadow 150ms ease-out; }
+body.scrolled .topbar { background: var(--bg); box-shadow: 0 0 0 100vmax var(--bg); clip-path: inset(0 -100vmax -1px); border-bottom: 1px solid var(--border); padding-top: calc(10px + env(safe-area-inset-top)); padding-bottom: 10px; }
+.cardnav { position: sticky; top: calc(66px + env(safe-area-inset-top)); z-index: 14; }
