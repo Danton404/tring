@@ -3,7 +3,7 @@ import { hosted, cloud, initAuth, signInWithGoogle, signOut, loadInfo, serverKey
 import * as market from './market.js';
 import { holdings, planSummary, indicators } from './calc.js';
 import { parseCsv, isT212, summarize, buildTransactions } from './importer.js';
-import { portfolioHistory } from './history.js';
+import { portfolioHistory, cachedHistory } from './history.js';
 import { ask, PROVIDERS, modelFor, availableProviders, activeProvider } from './ai.js';
 import { initFx, magicRings } from './fx.js';
 import {
@@ -345,10 +345,11 @@ function loadPerf() {
   });
   if (p === perf.promise) return;
   perf.promise = p;
-  perf.points = null;
+  // Show the last rebuilt history right away; the fresh one replaces it when ready
+  perf.points = perf.points || cachedHistory(base());
   perf.error = null;
   p.then((pts) => { if (perf.promise === p) { perf.points = pts; if (ui.tab === 'portfolio') renderPerf(); } })
-    .catch((e) => { if (perf.promise === p) { perf.error = e.message; if (ui.tab === 'portfolio') renderPerf(); } });
+    .catch((e) => { if (perf.promise === p && !perf.points) { perf.error = e.message; if (ui.tab === 'portfolio') renderPerf(); } });
 }
 
 const toAthPct = (id) => {
@@ -427,6 +428,10 @@ function renderPortfolio(el) {
             <span class="eyebrow" id="perf-label">Portfolio</span>
             <strong class="hero num" id="perf-value">${bigMoney(total, base())}</strong>
             <span class="perf-sub small num" id="perf-sub"><span class="skeleton" style="display:inline-block;width:140px;height:14px"></span></span>
+            ${c.amount > 0 ? `<div class="perf-split small num">
+              <span><i class="sw-dot" style="background:var(--accent)"></i>Investments ${money(totals.value)}</span>
+              <button type="button" class="link-btn" data-act="cash"><i class="sw-dot" style="background:var(--muted)"></i>Cash ${money(+c.amount)}${c.show ? '' : ' <span class="muted">(not in total)</span>'}</button>
+            </div>` : ''}
           </div>
           <div class="perf-actions">
             <button class="icon-btn" type="button" data-act="cash" aria-label="Cash on hand">${icon('banknote')}</button>
@@ -538,7 +543,7 @@ function renderPerf() {
   }
   const first = pts[0], last = pts[pts.length - 1];
   const rest = gainBetween(first, last);
-  const color = rest.gain >= 0 ? 'var(--success)' : 'var(--danger)';
+  const color = rest.gain >= 0 ? 'var(--accent)' : 'var(--danger)';
   const chart = lineChart([
     { values: pts.map((p) => p.value), color, fill: true },
     { values: pts.map((p) => p.invested), color: 'var(--muted)', dash: true },
@@ -632,7 +637,7 @@ function openAsset(id) {
       if (price != null && pts.length && pts[pts.length - 1].date < todayISO()) pts = [...pts, { date: todayISO(), close: price }];
       if (pts.length < 2) { box.innerHTML = '<p class="muted small chart-empty">Not enough history.</p>'; return; }
       const f0 = pts[0].close, lastPx = pts[pts.length - 1].close;
-      const color = lastPx >= f0 ? 'var(--success)' : 'var(--danger)';
+      const color = lastPx >= f0 ? 'var(--accent)' : 'var(--danger)';
       const avgLocal = h && market.fxRate(ccy, base()) ? h.avg / market.fxRate(ccy, base()) : null;
       const closes = pts.map((p) => p.close);
       // Draw the average-price line only when it doesn't flatten the price line
@@ -1558,6 +1563,9 @@ async function boot() {
     else if (reason === 'settings' && ui.tab === 'markets') render();
   });
   window.addEventListener('hashchange', route);
+  const onScroll = () => document.body.classList.toggle('scrolled', scrollY > 12);
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
   route();
   renderSyncStatus();
   refresh();

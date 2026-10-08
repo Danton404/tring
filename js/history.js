@@ -24,6 +24,21 @@ function historySymbol(a) {
 }
 
 let memo = { key: null, promise: null };
+const CACHE_KEY = 'tring.history.v1';
+const MISS_DAYS = 7;
+// Each lookup gets a time limit, and the whole rebuild a deadline, so the chart never waits forever
+const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
+
+// Last rebuilt history, shown instantly while a fresh one loads
+export function cachedHistory(base) {
+  try {
+    const c = JSON.parse(localStorage.getItem(CACHE_KEY));
+    return c?.base === base ? c.points : null;
+  } catch { return null; }
+}
+function saveHistory(base, points) {
+  try { localStorage.setItem(CACHE_KEY, JSON.stringify({ base, points })); } catch { /* full or blocked */ }
+}
 
 /**
  * Daily points [{ date, value, invested, realized }] in the base currency (realized is cumulative).
@@ -32,7 +47,7 @@ let memo = { key: null, promise: null };
 export function portfolioHistory({ transactions, assets, base, livePrice, remember }) {
   const key = `d|${base}|${transactions.length}|${iso(Date.now())}`;
   if (memo.key === key) return memo.promise;
-  memo = { key, promise: build({ transactions, assets, base, livePrice, remember }) };
+  memo = { key, promise: build({ transactions, assets, base, livePrice, remember }).then((pts) => { saveHistory(base, pts); return pts; }) };
   memo.promise.catch(() => { memo = { key: null, promise: null }; });
   return memo.promise;
 }
@@ -50,36 +65,41 @@ async function build({ transactions, assets, base, livePrice, remember }) {
   // Daily closes per asset, a few at a time
   const series = new Map(); // assetId -> { ccy, points }
   const queue = [...ids];
+  const deadline = Date.now() + 40e3;
+  const today0 = iso(Date.now());
   async function worker() {
-    while (queue.length) {
+    while (queue.length && Date.now() < deadline) {
       const id = queue.shift();
       const a = byId.get(id);
       if (!a) continue;
       let sym = historySymbol(a);
-      if (!sym && a.isin) {
+      // Closed holdings: search their listing once, and don't retry a miss for a week
+      const missedRecently = a.histMiss && (Date.now() - new Date(a.histMiss).getTime()) / DAY < MISS_DAYS;
+      if (!sym && a.isin && !missedRecently) {
         try {
-          const found = await market.resolveIsin({ isin: a.isin, tickers: [a.symbol], refPriceEur: base === 'EUR' ? a.lastPrice : null, yahooOnly: true });
-          if (found?.yahoo) { sym = found.yahoo; remember?.(id, { histSymbol: sym }); }
+          const found = await withTimeout(market.resolveIsin({ isin: a.isin, tickers: [a.symbol], refPriceEur: base === 'EUR' ? a.lastPrice : null, yahooOnly: true }), 12e3);
+          if (found?.yahoo) { sym = found.yahoo; remember?.(id, { histSymbol: sym, histMiss: null }); }
+          else remember?.(id, { histMiss: today0 });
         } catch { /* falls back to trade prices */ }
       }
       if (!sym) continue;
       try {
-        const h = await market.dailyHistory(sym);
+        const h = await withTimeout(market.dailyHistory(sym), 12e3);
         if (h.points.length) series.set(id, h);
       } catch { /* falls back to trade prices */ }
     }
   }
-  await Promise.all(Array.from({ length: 4 }, worker));
+  await Promise.all(Array.from({ length: 6 }, worker));
 
   // Exchange rates for every currency involved
   const start = txs[0].date;
-  const days = Math.ceil((Date.now() - new Date(start).getTime()) / DAY) + 15;
   const fx = new Map();
   for (const ccy of new Set([...series.values()].map((s) => s.ccy))) {
     if (ccy === base) continue;
     try {
-      const rates = await market.fxHistory(base, ccy, days); // ccy per 1 base
-      fx.set(ccy, Object.entries(rates).map(([date, r]) => ({ date, v: 1 / r })).sort((a, b) => a.date.localeCompare(b.date)));
+      // Yahoo FX (cached on the server) keeps this off the rate-limited Twelve Data queue
+      const h = await withTimeout(market.dailyHistory(`${base}${ccy}=X`), 12e3); // ccy per 1 base
+      fx.set(ccy, h.points.filter((p) => p.v > 0).map((p) => ({ date: p.date, v: 1 / p.v })));
     } catch { /* this currency's assets use trade prices */ }
   }
 

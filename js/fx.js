@@ -121,7 +121,7 @@ function initBento() {
 
 // ---------- Magic Rings (canvas): expanding rings that fade in and out, with a slight wobble
 
-const RING_COLORS = [[45, 212, 191], [125, 211, 252]]; // teal to sky
+const RING_COLORS = [[56, 189, 248], [99, 132, 255]]; // sky to blue
 export function magicRings(canvas, { count = 5, speed = 1, thickness = 1.5, base = 0.2, noise = 0.1, glow = 8, opacity = 0.9 } = {}) {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;

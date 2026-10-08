@@ -50,7 +50,11 @@ export async function saveState(state) {
 
 export async function callFn(name, body) {
   const c = await sb();
-  const { data, error } = await c.functions.invoke(name, { body });
+  // A stuck request must not leave the app loading forever
+  const { data, error } = await Promise.race([
+    c.functions.invoke(name, { body }),
+    new Promise((_, rej) => setTimeout(() => rej(new Error('The server took too long to respond.')), name === 'ai' ? 180e3 : 25e3)),
+  ]);
   if (error) {
     let msg = error.message;
     try { msg = (await error.context.json()).error || msg; } catch { /* not JSON */ }

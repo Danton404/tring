@@ -148,7 +148,7 @@ export async function resolveIsin({ isin, tickers, refPriceEur, yahooOnly = fals
       const { meta } = await yahooChart(q.symbol, '5d', '1d');
       const ccy = meta.currency;
       if (!meta.price || !/^[A-Z]{3}$/.test(ccy || '')) continue; // skips minor units such as GBp
-      const rate = ccy === 'EUR' ? 1 : +(await twelve('quote', { symbol: `EUR/${ccy}` })).close;
+      const rate = ccy === 'EUR' ? 1 : (await yahooChart(`EUR${ccy}=X`, '5d', '1d')).meta.price;
       if (rate && plausible(meta.price / rate)) return { source: 'yahoo', symbol: q.symbol, yahoo: q.symbol, currency: ccy };
     } catch { /* try the next listing */ }
   }
