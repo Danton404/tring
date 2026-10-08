@@ -1,4 +1,4 @@
-// Portfolio value over time, rebuilt from transactions and weekly historical prices (Yahoo via the server).
+// Portfolio value over time, rebuilt from transactions and daily historical prices (Yahoo via the server).
 import * as market from './market.js';
 
 const DAY = 864e5;
@@ -26,11 +26,11 @@ function historySymbol(a) {
 let memo = { key: null, promise: null };
 
 /**
- * Weekly points [{ date, value, invested, realized }] in the base currency (realized is cumulative).
+ * Daily points [{ date, value, invested, realized }] in the base currency (realized is cumulative).
  * remember(assetId, patch) stores history symbols found for closed holdings, so they're looked up once.
  */
 export function portfolioHistory({ transactions, assets, base, livePrice, remember }) {
-  const key = `${base}|${transactions.length}|${iso(Date.now())}`;
+  const key = `d|${base}|${transactions.length}|${iso(Date.now())}`;
   if (memo.key === key) return memo.promise;
   memo = { key, promise: build({ transactions, assets, base, livePrice, remember }) };
   memo.promise.catch(() => { memo = { key: null, promise: null }; });
@@ -47,7 +47,7 @@ async function build({ transactions, assets, base, livePrice, remember }) {
   const tradePx = new Map();
   for (const t of txs) if (t.price > 0) (tradePx.get(t.assetId) || tradePx.set(t.assetId, []).get(t.assetId)).push({ date: t.date, v: t.price });
 
-  // Weekly closes per asset, a few at a time
+  // Daily closes per asset, a few at a time
   const series = new Map(); // assetId -> { ccy, points }
   const queue = [...ids];
   async function worker() {
@@ -64,7 +64,7 @@ async function build({ transactions, assets, base, livePrice, remember }) {
       }
       if (!sym) continue;
       try {
-        const h = await market.weeklyHistory(sym);
+        const h = await market.dailyHistory(sym);
         if (h.points.length) series.set(id, h);
       } catch { /* falls back to trade prices */ }
     }
@@ -93,14 +93,14 @@ async function build({ transactions, assets, base, livePrice, remember }) {
     return at(tradePx.get(id) || [], date);
   };
 
-  // Replay trades week by week (average-cost, same rules as the holdings table)
+  // Replay trades day by day (average-cost, same rules as the holdings table)
   const pos = new Map();
   const out = [];
   let realized = 0;
   let i = 0;
   const today = iso(Date.now());
   const dates = [];
-  for (let d = new Date(`${start}T00:00:00Z`); iso(d) < today; d = new Date(d.getTime() + 7 * DAY)) dates.push(iso(d));
+  for (let d = new Date(`${start}T00:00:00Z`); iso(d) < today; d = new Date(d.getTime() + DAY)) dates.push(iso(d));
   dates.push(today);
 
   for (const date of dates) {

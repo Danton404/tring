@@ -1,7 +1,7 @@
 {
   "name": "TRING",
   "short_name": "TRING",
-  "description": "Trading + Thinking: all-time-high tracker, portfolio and DCA planner with AI analysis.",
+  "description": "All-time-high tracker, portfolio and DCA planner with AI analysis.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

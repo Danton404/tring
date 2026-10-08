@@ -7,7 +7,7 @@ import { portfolioHistory } from './history.js';
 import { ask, PROVIDERS, modelFor, availableProviders, activeProvider } from './ai.js';
 import {
   $, $$, esc, icon, fmtMoney, fmtSignedMoney, fmtPct, fmtNum, fmtDate, todayISO, tone,
-  toast, openSheet, donut, lineChart, colorAt, md,
+  toast, openSheet, donut, lineChart, bindScrub, bigMoney, countUp, colorAt, md,
 } from './ui.js';
 
 const TABS = [
@@ -46,8 +46,7 @@ const round = (n, d = 2) => Math.round(n * 10 ** d) / 10 ** d;
 // =====================================================================
 
 function buildNav() {
-  $('#nav').innerHTML = `<div class="brand"><span class="logo" aria-hidden="true"></span>TRING<small>Trading + Thinking</small></div>` +
-    TABS.map((t) => `<a href="#${t.id}" data-tab="${t.id}">${icon(t.icon, 22)}<span>${t.label}</span></a>`).join('');
+  $('#nav').innerHTML = TABS.map((t) => `<a href="#${t.id}" data-tab="${t.id}">${icon(t.icon, 22)}<span>${t.label}</span></a>`).join('');
 }
 
 function route() {
@@ -88,7 +87,7 @@ async function refresh(force = false) {
 
 function onMarket() {
   // Don't re-render while the user is typing in the transaction search
-  if (ui.tab === 'portfolio' && document.activeElement?.id === 'tx-q') return;
+  if (ui.tab === 'portfolio' && ['tx-q', 'hold-q'].includes(document.activeElement?.id)) return;
   if (ui.tab === 'markets' || ui.tab === 'portfolio') render();
   else if (ui.tab === 'plan') updatePlanResults();
 }
@@ -140,15 +139,14 @@ function renderMarkets(el) {
   const sortOpts = { default: 'My order', closest: 'Closest to ATH', furthest: 'Furthest from ATH', today: 'Best today' };
 
   el.innerHTML = `
-    ${needsKey ? `<div class="banner">${icon('alert')}<div><strong>Connect market data</strong><p>Add a free Twelve Data API key to load stocks, ETFs, indices and gold. Crypto works without a key.</p></div><a class="btn" href="#settings">Open Settings</a></div>` : ''}
+    ${needsKey ? `<div class="banner">${icon('alert')}<div><strong>Connect market data</strong><p>Add a free Twelve Data key for stocks, ETFs and gold.</p></div><a class="btn" href="#settings">Open Settings</a></div>` : ''}
     <div class="toolbar">
       <div class="field inline"><label for="sort">Sort</label>
         <select id="sort">${Object.entries(sortOpts).map(([k, v]) => `<option value="${k}"${k === ui.sort ? ' selected' : ''}>${v}</option>`).join('')}</select></div>
       <button class="btn primary" type="button" data-act="add-asset">${icon('plus')}Add asset</button>
     </div>
     ${rows.length ? `<div class="grid">${rows.map(assetCard).join('')}</div>`
-      : emptyState('No assets yet', 'Add stocks, ETFs, gold or crypto to see how far each one is from its all-time high.', `<button class="btn primary" data-act="add-asset">${icon('plus')}Add asset</button>`)}
-    <p class="footnote">"Gain needed" is how much the price must rise to get back to its all-time high: (ATH ÷ price − 1). Stocks, ETFs and gold come from Twelve Data (ATH = highest monthly high). Crypto comes from CoinGecko. Prices may be delayed.</p>`;
+      : emptyState('No assets yet', 'Add a stock, ETF, gold or crypto.', `<button class="btn primary" data-act="add-asset">${icon('plus')}Add asset</button>`)}`;
   $('#sort', el).onchange = (e) => { ui.sort = e.target.value; renderMarkets(el); };
 }
 
@@ -156,7 +154,7 @@ function assetCard(v) {
   const { a, q, at, price, ath, toAth, ofAth, err, loading } = v;
   const cmoney = (n) => fmtMoney(n, a.currency || 'USD');
   const priceBlock = price != null
-    ? `<div class="price num">${cmoney(price)}</div>${q.changePct != null && isFinite(q.changePct) ? `<div class="small num ${tone(q.changePct)}">${fmtPct(q.changePct)} today</div>` : ''}`
+    ? `<div class="price num">${cmoney(price)}</div>${q.changePct != null && isFinite(q.changePct) ? `<div class="small num ${tone(q.changePct)}">${fmtPct(q.changePct)}</div>` : ''}`
     : loading ? '<div class="skeleton" style="width:96px;height:24px"></div>' : '';
   let body;
   if (price == null && err) {
@@ -165,24 +163,24 @@ function assetCard(v) {
       : `<button class="btn small" type="button" data-act="retry">${icon('refresh', 16)}Retry</button>`;
     body = `<div class="card-error" role="alert"><p>${esc(err)}</p>${fix}</div>`;
   } else if (a.source === 'none') {
-    body = `<p class="muted small">No live price source found for this listing. The portfolio uses its last trade price${a.lastPrice ? ` (${money(a.lastPrice)}, ${fmtDate(a.lastPriceDate)})` : ''}.</p>`;
+    body = `<p class="muted small">No live price. Using last trade${a.lastPrice ? ` ${money(a.lastPrice)}, ${fmtDate(a.lastPriceDate)}` : ''}.</p>`;
   } else if (price != null && at?.partial) {
-    body = `<p class="muted small">This listing has no price history, so its all-time high isn't available.</p>`;
+    body = `<p class="muted small">No ATH for this listing.</p>`;
   } else if (price == null || ath == null) {
     body = `<div class="skeleton" style="height:56px"></div><div class="skeleton" style="height:8px;margin-top:12px"></div>`;
   } else {
-    const range = q.low52 && q.high52 ? ` · 52w ${cmoney(q.low52)} to ${cmoney(q.high52)}` : '';
+    const range = q.low52 && q.high52 ? ` · 52W ${cmoney(q.low52)}–${cmoney(q.high52)}` : '';
     body = `
       <div class="ath-row">
-        <div><span class="label">Gain needed to reach ATH</span><strong class="big num">${toAth < 0.01 ? 'At ATH' : fmtPct(toAth)}</strong></div>
-        <div class="right"><span class="label">All-time high</span><span class="num strong">${cmoney(ath)}</span><span class="muted small">${fmtDate(at.athDate)}</span></div>
+        <div><span class="eyebrow">To ATH</span><strong class="big num">${toAth < 0.01 ? 'At ATH' : fmtPct(toAth)}</strong></div>
+        <div class="right"><span class="eyebrow">All-time high</span><span class="num strong">${cmoney(ath)}</span><span class="muted small">${fmtDate(at.athDate)}</span></div>
       </div>
       <div class="meter" role="meter" aria-label="Price as a share of all-time high" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${ofAth.toFixed(1)}"><span style="width:${ofAth}%;background:${assetColor(a.id)}"></span></div>
-      <p class="muted small num">${ofAth.toFixed(1)}% of ATH · ${fmtPct(ofAth - 100)} from peak${range}</p>`;
+      <p class="muted small num">${ofAth.toFixed(1)}% of ATH${range}</p>`;
   }
   return `<article class="card asset" data-id="${a.id}">
     <header class="asset-head">
-      <div class="asset-id"><span class="dot" style="background:${assetColor(a.id)}"></span><div><h3>${esc(a.name)}</h3><span class="muted small">${esc(a.symbol)} · ${KINDS[a.kind] || esc(a.kind)}</span></div></div>
+      <button type="button" class="asset-id" data-act="open-asset">${avatar(a.id)}<span><h3>${esc(a.name)}</h3><span class="muted small">${esc(a.symbol)} · ${KINDS[a.kind] || esc(a.kind)}</span></span></button>
       <div class="price-block">${priceBlock}</div>
     </header>
     ${body}
@@ -296,7 +294,9 @@ function removeAsset(id) {
 // ---------- Portfolio view state (not synced)
 
 const TX_PAGE = 15;
-const port = { range: '1y', sort: { key: 'value', dir: -1 }, txOpen: false, page: 1, q: '', asset: '', type: '', txSort: 'new' };
+const RANGES = [['1w', '1W'], ['1m', '1M'], ['3m', '3M'], ['6m', '6M'], ['ytd', 'YTD'], ['1y', '1Y'], ['all', 'All']];
+const RANGE_LABEL = { '1w': 'Past week', '1m': 'Past month', '3m': 'Past 3 months', '6m': 'Past 6 months', ytd: 'Year to date', '1y': 'Past year', all: 'All time' };
+const port = { range: '1y', sort: 'value', hq: '', txOpen: false, page: 1, q: '', asset: '', type: '', txSort: 'new', shown: null };
 const perf = { promise: null, points: null, error: null };
 
 function loadPerf() {
@@ -319,134 +319,309 @@ const toAthPct = (id) => {
   return q && at?.ath && !at.partial ? Math.max(0, (at.ath / q - 1) * 100) : null;
 };
 
+const isoDaysAgo = (d) => new Date(Date.now() - d * 864e5).toISOString().slice(0, 10);
+function rangeFrom(r) {
+  if (r === 'ytd') return `${new Date().getFullYear() - 1}-12-31`;
+  const d = { '1w': 7, '1m': 30, '3m': 91, '6m': 182, '1y': 365 }[r];
+  return d ? isoDaysAgo(d) : '';
+}
+// Points from the last one on or before `from` (the baseline) to today
+function sliceFrom(points, from) {
+  if (!from) return points;
+  let k = 0;
+  for (let i = 0; i < points.length; i++) if (points[i].date <= from) k = i;
+  return points.slice(k);
+}
+// Market gain between two points: change in value, minus money added, plus profits taken
+function gainBetween(a, b) {
+  const gain = (b.value - a.value) - (b.invested - a.invested) + (b.realized - a.realized);
+  const basis = a.value + Math.max(0, b.invested - a.invested);
+  return { gain, pct: basis > 0 ? (gain / basis) * 100 : null };
+}
+// Today's move from live quotes (day change × quantity, in the base currency)
+function dayPnl(open) {
+  let gain = 0, prev = 0, any = false;
+  for (const r of open) {
+    const ch = toBase(r.assetId, market.quote(r.assetId)?.change ?? null);
+    if (ch == null || !isFinite(ch) || r.value == null) continue;
+    any = true;
+    gain += ch * r.qty;
+    prev += r.value - ch * r.qty;
+  }
+  return any ? { gain, pct: prev > 0 ? (gain / prev) * 100 : null } : null;
+}
+
+const cash = () => store.state.cash || { amount: 0, show: false };
+const initials = (a) => (a?.symbol || a?.name || '?').replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase() || '?';
+const avatar = (id) => `<span class="avatar" style="--c:${assetColor(id)}" aria-hidden="true">${esc(initials(assetById(id)))}</span>`;
+const pnl = (r) => (r ? `<span class="num ${tone(r.gain)}">${smoney(r.gain)}${r.pct != null ? ` <span class="pct">(${fmtPct(r.pct)})</span>` : ''}</span>` : '<span class="muted">-</span>');
+const statRow = (label, value) => `<div class="stat"><span class="eyebrow">${label}</span><span class="num">${value}</span></div>`;
+
 function renderPortfolio(el) {
   const { state } = store;
   if (!state.transactions.length) {
-    el.innerHTML = emptyState('No investments yet',
-      'Import your Trading 212 history, or log a buy to start tracking invested capital and performance. You can also log buys straight from a plan in the Plan tab.',
+    el.innerHTML = emptyState('No investments yet', 'Import your Trading 212 history or log a buy.',
       `<div class="btn-row"><button class="btn primary" type="button" data-act="import-t212">${icon('upload')}Import from Trading 212</button><button class="btn" type="button" data-act="add-tx">${icon('plus')}Log a transaction</button></div>`);
     return;
   }
   const { open, rows, totals } = holdings(state.transactions, priceOf, athOf);
+  const c = cash();
+  const cashOn = c.show && c.amount > 0;
+  const total = totals.value != null ? totals.value + (c.show ? +c.amount || 0 : 0) : null;
   const toAthTotal = totals.valueAtAth != null && totals.value ? (totals.valueAtAth / totals.value - 1) * 100 : null;
-  const kpi = (label, value, sub = '', cls = '') =>
-    `<div class="kpi"><span class="label">${label}</span><strong class="num ${cls}">${value}</strong>${sub ? `<span class="small num ${cls}">${sub}</span>` : ''}</div>`;
 
+  // Holdings list (Trading 212 style)
+  const sorters = {
+    value: (x, y) => (y.value ?? -Infinity) - (x.value ?? -Infinity),
+    return: (x, y) => (y.plPct ?? -Infinity) - (x.plPct ?? -Infinity),
+    today: (x, y) => (market.quote(y.assetId)?.changePct ?? -Infinity) - (market.quote(x.assetId)?.changePct ?? -Infinity),
+    name: (x, y) => assetName(x.assetId).localeCompare(assetName(y.assetId)),
+    toAth: (x, y) => (toAthPct(x.assetId) ?? Infinity) - (toAthPct(y.assetId) ?? Infinity),
+  };
   const segs = open.filter((r) => r.value > 0).map((r) => ({ label: assetName(r.assetId), value: r.value, color: assetColor(r.assetId) }));
+  if (cashOn) segs.push({ label: 'Cash', value: +c.amount, color: 'var(--muted)' });
   const totalVal = segs.reduce((s, x) => s + x.value, 0);
 
-  // Holdings, sortable by any column
-  const sortVal = {
-    name: (r) => assetName(r.assetId).toLowerCase(),
-    qty: (r) => r.qty, avg: (r) => r.avg, price: (r) => r.price ?? -Infinity, value: (r) => r.value ?? -Infinity,
-    pl: (r) => r.plPct ?? -Infinity, toAth: (r) => toAthPct(r.assetId) ?? Infinity, atAth: (r) => r.valueAtAth ?? -Infinity,
-  };
-  const { key, dir } = port.sort;
-  const sorted = [...open].sort((x, y) => {
-    const a = sortVal[key](x), b = sortVal[key](y);
-    return (a < b ? -1 : a > b ? 1 : 0) * dir;
-  });
-  const th = (k, label, right = true) => {
-    const active = key === k;
-    return `<th class="${right ? 'r' : ''}"${active ? ` aria-sort="${dir > 0 ? 'ascending' : 'descending'}"` : ''}><button type="button" class="th-sort${active ? ' active' : ''}" data-act="hold-sort" data-key="${k}">${label}${active ? `<span aria-hidden="true">${dir > 0 ? ' ↑' : ' ↓'}</span>` : ''}</button></th>`;
-  };
-
   el.innerHTML = `
-    <div class="toolbar end"><div class="btn-row"><button class="btn" type="button" data-act="import-t212">${icon('upload')}Import from Trading 212</button><button class="btn primary" type="button" data-act="add-tx">${icon('plus')}Log transaction</button></div></div>
-    <section class="card perf">
-      <div class="perf-head">
-        <div>
-          <span class="label">Assets under management</span>
-          <strong class="aum num">${money(totals.value)}</strong>
-          <span class="small num ${tone(totals.pl)}">${smoney(totals.pl)} (${fmtPct(totals.plPct)}) unrealized${totals.unpriced ? ` · ${totals.unpriced} holding${totals.unpriced === 1 ? '' : 's'} not priced yet` : ''}</span>
+    <div class="port">
+      <section class="panel perf" aria-label="Performance">
+        <div class="perf-head">
+          <div class="perf-title">
+            <span class="eyebrow" id="perf-label">Portfolio</span>
+            <strong class="hero num" id="perf-value">${bigMoney(total, base())}</strong>
+            <span class="perf-sub small num" id="perf-sub"><span class="skeleton" style="display:inline-block;width:140px;height:14px"></span></span>
+          </div>
+          <div class="perf-actions">
+            <button class="icon-btn" type="button" data-act="cash" aria-label="Cash on hand">${icon('banknote')}</button>
+            <button class="icon-btn" type="button" data-act="import-t212" aria-label="Import from Trading 212">${icon('upload')}</button>
+            <button class="btn primary small" type="button" data-act="add-tx">${icon('plus', 16)}Log</button>
+          </div>
         </div>
-        <div class="seg" role="radiogroup" aria-label="Chart range">${[['3m', '3M'], ['6m', '6M'], ['1y', '1Y'], ['all', 'All']].map(([v, l]) =>
+        <div id="perf-body"></div>
+        <div class="ranges" role="radiogroup" aria-label="Chart range">${RANGES.map(([v, l]) =>
           `<label><input type="radio" name="perf-range" value="${v}"${port.range === v ? ' checked' : ''}><span>${l}</span></label>`).join('')}</div>
-      </div>
-      <div id="perf-body"></div>
-      <div class="kpis perf-kpis">
-        ${kpi('Invested (cost basis)', money(totals.totalCost), `${money(totals.deposited)} total bought`)}
-        ${kpi('Unrealized P/L', smoney(totals.pl), fmtPct(totals.plPct), tone(totals.pl))}
-        ${kpi('Realized P/L', smoney(totals.realized), '', tone(totals.realized))}
-        ${kpi('Value if all at ATH', money(totals.valueAtAth), toAthTotal != null ? `${fmtPct(toAthTotal)} from here` : '')}
-      </div>
-    </section>
-    <section class="card"><h2>Allocation</h2>
-      ${segs.length ? `<div class="alloc">${donut(segs, { label: 'Portfolio allocation by market value', center: `${segs.length} asset${segs.length === 1 ? '' : 's'}` })}
-        <ul class="legend-list cols">${segs.sort((x, y) => y.value - x.value).map((s) => `<li><i style="background:${s.color}"></i><span>${esc(s.label)}</span><span class="num">${fmtPct((s.value / totalVal) * 100, { signed: false, digits: 1 })}</span></li>`).join('')}</ul></div>`
-        : '<p class="muted small">Waiting for prices.</p>'}
-    </section>
-    <section class="card"><h2>Holdings</h2>
-      ${open.length ? `<div class="table-wrap"><table class="holdings">
-        <thead><tr>${th('name', 'Asset', false)}${th('qty', 'Qty')}${th('avg', 'Avg cost')}${th('price', 'Price')}${th('value', 'Value')}${th('pl', 'P/L')}${th('toAth', 'To ATH')}${th('atAth', 'At ATH')}</tr></thead>
-        <tbody>${sorted.map((r) => {
-          const ta = toAthPct(r.assetId);
-          return `<tr>
-          <td><span class="dot" style="background:${assetColor(r.assetId)}"></span>${esc(assetName(r.assetId))}</td>
-          <td class="r num">${fmtNum(r.qty, 4)}</td><td class="r num">${money(r.avg)}</td><td class="r num">${money(r.price)}</td>
-          <td class="r num">${money(r.value)}</td>
-          <td class="r num ${tone(r.pl)}">${smoney(r.pl)}<br><span class="small">${fmtPct(r.plPct)}</span></td>
-          <td class="r num">${ta == null ? '-' : ta < 0.01 ? 'At ATH' : fmtPct(ta)}</td>
-          <td class="r num">${money(r.valueAtAth)}</td></tr>`;
-        }).join('')}</tbody></table></div>
-        <p class="small muted">To ATH is the gain each holding needs to get back to its all-time high.</p>`
-        : '<p class="muted small">No open positions.</p>'}
-      ${rows.some((r) => r.qty === 0 && r.realized) ? `<p class="small muted">Closed positions are included in realized P/L.</p>` : ''}
-    </section>
-    <section class="card" id="tx-section"></section>`;
+      </section>
 
+      <section class="panel returns" aria-label="Profit and loss">
+        <h2 class="eyebrow">Profit and loss</h2>
+        <div class="pnl-grid" id="pnl-grid"></div>
+      </section>
+
+      <section class="panel breakdown" aria-label="Breakdown">
+        <div class="box">
+          ${statRow('Investments', money(totals.value))}
+          ${c.show ? statRow('Cash', `<button class="link-btn" type="button" data-act="cash">${money(+c.amount || 0)}</button>`) : ''}
+          ${statRow('Invested', money(totals.totalCost))}
+          ${statRow('Unrealized', `<span class="${tone(totals.pl)}">${smoney(totals.pl)} (${fmtPct(totals.plPct)})</span>`)}
+          ${statRow('Realized', `<span class="${tone(totals.realized)}">${smoney(totals.realized)}</span>`)}
+          ${statRow('Value at ATH', `${money(totals.valueAtAth)}${toAthTotal != null ? ` <span class="muted">${fmtPct(toAthTotal)}</span>` : ''}`)}
+        </div>
+      </section>
+
+      <section class="panel holdings-panel" aria-label="Holdings">
+        <div class="hold-head">
+          <div><span class="eyebrow">Investments</span><strong class="num hold-total">${money(totals.value)}</strong></div>
+          <label class="sr-only" for="hold-sort">Sort</label>
+          <select id="hold-sort" class="select-sm">${[['value', 'Value'], ['return', 'Return'], ['today', 'Today'], ['toAth', 'To ATH'], ['name', 'Name']].map(([k, l]) => `<option value="${k}"${port.sort === k ? ' selected' : ''}>${l}</option>`).join('')}</select>
+        </div>
+        <div class="search">${icon('search', 18)}<label class="sr-only" for="hold-q">Search portfolio</label><input id="hold-q" type="search" placeholder="Search portfolio" value="${esc(port.hq)}" autocomplete="off"></div>
+        <ul class="hold-list" id="hold-list"></ul>
+      </section>
+
+      <section class="panel alloc-panel"><h2 class="eyebrow">Allocation</h2>
+        ${segs.length ? `<div class="alloc">${donut(segs, { label: 'Portfolio allocation by market value', center: `${segs.length}` })}
+          <ul class="legend-list cols">${segs.sort((x, y) => y.value - x.value).map((s) => `<li><i style="background:${s.color}"></i><span>${esc(s.label)}</span><span class="num">${fmtPct((s.value / totalVal) * 100, { signed: false, digits: 1 })}</span></li>`).join('')}</ul></div>`
+          : '<div class="skeleton" style="height:120px"></div>'}
+      </section>
+
+      <section class="panel tx-panel" id="tx-section"></section>
+    </div>`;
+
+  const renderList = () => {
+    const q = port.hq.trim().toLowerCase();
+    const list = [...open].sort(sorters[port.sort]).filter((r) => !q || `${assetName(r.assetId)} ${assetById(r.assetId)?.symbol || ''}`.toLowerCase().includes(q));
+    $('#hold-list', el).innerHTML = list.map((r) => {
+      const a = assetById(r.assetId);
+      return `<li><button type="button" class="hold" data-act="open-asset" data-id="${r.assetId}">
+        ${avatar(r.assetId)}
+        <span class="hold-main"><span class="hold-name">${esc(assetName(r.assetId))}</span><span class="hold-sub num">${fmtNum(r.qty, 8)} ${esc(a?.symbol || '')}</span></span>
+        <span class="hold-right"><span class="num hold-val">${money(r.value)}</span><span class="num small ${tone(r.pl)}">${smoney(r.pl)} (${fmtPct(r.plPct)})</span></span>
+      </button></li>`;
+    }).join('') + (cashOn && !q ? `<li><button type="button" class="hold" data-act="cash"><span class="avatar cash" aria-hidden="true">${icon('banknote', 18)}</span><span class="hold-main"><span class="hold-name">Cash</span><span class="hold-sub">${base()}</span></span><span class="hold-right"><span class="num hold-val">${money(+c.amount)}</span></span></button></li>` : '')
+      || '<li class="muted small hold-empty">No match</li>';
+  };
+  renderList();
+  $('#hold-q', el).addEventListener('input', (e) => { port.hq = e.target.value; renderList(); });
+  $('#hold-sort', el).onchange = (e) => { port.sort = e.target.value; renderList(); };
   $$('[name=perf-range]', el).forEach((r) => (r.onchange = () => { port.range = r.value; renderPerf(); }));
+
+  // Hero number counts up when it changes (after React Bits' CountUp)
+  const hero = $('#perf-value', el);
+  countUp(hero, port.shown, total, (v) => bigMoney(v, base()));
+  port.shown = total;
+  port.live = { total, open, totals };
+
   loadPerf();
   renderPerf();
   renderTx();
 }
 
+function renderPnl() {
+  const box = $('#pnl-grid');
+  if (!box || !port.live) return;
+  const { open, totals } = port.live;
+  const pts = perf.points;
+  const from = (r) => (pts?.length > 1 ? gainBetween(sliceFrom(pts, rangeFrom(r))[0], pts[pts.length - 1]) : undefined);
+  const all = totals.pl != null ? { gain: totals.pl + totals.realized, pct: totals.deposited ? ((totals.pl + totals.realized) / totals.deposited) * 100 : null } : null;
+  const cells = [['Today', dayPnl(open)], ['1W', from('1w')], ['1M', from('1m')], ['YTD', from('ytd')], ['1Y', from('1y')], ['All time', all]];
+  box.innerHTML = cells.map(([l, r]) => `<div class="pnl"><span class="eyebrow">${l}</span>${r === undefined
+    ? (perf.error ? '<span class="muted">-</span>' : '<span class="skeleton" style="height:18px;width:80%"></span>')
+    : r ? `<strong class="num ${tone(r.gain)}">${smoney(r.gain)}</strong><span class="small num ${tone(r.gain)}">${fmtPct(r.pct)}</span>` : '<span class="muted">-</span>'}</div>`).join('');
+}
+
 function renderPerf() {
+  renderPnl();
   const box = $('#perf-body');
   if (!box) return;
+  const sub = $('#perf-sub'), label = $('#perf-label'), hero = $('#perf-value');
   if (perf.error) {
-    box.innerHTML = `<div class="card-error" role="alert"><p>Couldn't rebuild the history chart: ${esc(perf.error)}</p><button class="btn small" type="button" data-act="perf-retry">${icon('refresh', 16)}Retry</button></div>`;
+    sub.textContent = '';
+    box.innerHTML = `<div class="card-error" role="alert"><p>History unavailable: ${esc(perf.error)}</p><button class="btn small" type="button" data-act="perf-retry">${icon('refresh', 16)}Retry</button></div>`;
     return;
   }
   if (!perf.points) {
-    box.innerHTML = `<div class="skeleton" style="height:200px"></div><p class="small muted">Rebuilding your history from past prices. The first time takes up to a minute.</p>`;
+    box.innerHTML = `<div class="skeleton" style="height:220px"></div>`;
     return;
   }
-  const days = { '3m': 91, '6m': 182, '1y': 365 }[port.range];
-  const from = days ? new Date(Date.now() - days * 864e5).toISOString().slice(0, 10) : '';
-  const pts = perf.points.filter((p) => p.date >= from);
+  const pts = sliceFrom(perf.points, rangeFrom(port.range));
   if (pts.length < 2) {
-    box.innerHTML = `<p class="muted small">Not enough history in this range yet.</p>`;
+    sub.textContent = '';
+    box.innerHTML = `<p class="muted small chart-empty">Not enough history yet.</p>`;
     return;
   }
   const first = pts[0], last = pts[pts.length - 1];
-  // Market gain over the range: change in value, minus money added, plus profits taken by selling
-  const gain = (last.value - first.value) - (last.invested - first.invested) + (last.realized - first.realized);
-  const basis = first.value + Math.max(0, last.invested - first.invested);
-  const label = { '3m': 'the last 3 months', '6m': 'the last 6 months', '1y': 'the last year', all: 'all time' }[port.range];
-  box.innerHTML = `
-    <p class="small num perf-gain"><strong class="${tone(gain)}">${smoney(gain)}${basis > 0 ? ` (${fmtPct((gain / basis) * 100)})` : ''}</strong> <span class="muted">gain over ${label}, realized and unrealized, excluding money added</span></p>
-    <div class="legend"><span><i style="background:var(--accent)"></i>Value</span><span><i class="dashed"></i>Invested</span></div>
-    <div class="chart-wrap">${lineChart([
-      { values: pts.map((p) => p.value), color: 'var(--accent)', fill: true },
-      { values: pts.map((p) => p.invested), color: 'var(--muted)', dash: true },
-    ], { height: 220, label: `Portfolio value versus invested capital, ${label}` })}<div class="chart-cursor" hidden></div></div>
-    <div class="axis small muted num"><span>${fmtDate(first.date)}</span><span id="perf-readout" aria-live="polite">${fmtDate(last.date)} · ${money(last.value)}</span></div>`;
-
-  // Hover / touch readout
-  const wrap = $('.chart-wrap', box);
-  const cursor = $('.chart-cursor', box);
-  const readout = $('#perf-readout', box);
-  const show = (clientX) => {
-    const r = wrap.getBoundingClientRect();
-    const i = Math.max(0, Math.min(pts.length - 1, Math.round(((clientX - r.left) / r.width) * (pts.length - 1))));
-    const p = pts[i];
-    cursor.hidden = false;
-    cursor.style.left = `${(i / (pts.length - 1)) * 100}%`;
-    readout.textContent = `${fmtDate(p.date)} · ${money(p.value)} value · ${money(p.invested)} invested`;
+  const rest = gainBetween(first, last);
+  const color = rest.gain >= 0 ? 'var(--success)' : 'var(--danger)';
+  const chart = lineChart([
+    { values: pts.map((p) => p.value), color, fill: true },
+    { values: pts.map((p) => p.invested), color: 'var(--muted)', dash: true },
+  ], { height: 220, label: `Portfolio value versus invested, ${RANGE_LABEL[port.range].toLowerCase()}` });
+  const subLine = (g, when) => `<span class="${tone(g.gain)}">${g.gain >= 0 ? '▲' : '▼'} ${smoney(g.gain)}${g.pct != null ? ` (${fmtPct(g.pct)})` : ''}</span> <span class="muted">${when}</span>`;
+  const rest$ = () => {
+    label.textContent = 'Portfolio';
+    hero.innerHTML = bigMoney(port.live?.total, base());
+    sub.innerHTML = subLine(rest, RANGE_LABEL[port.range].toLowerCase());
   };
-  wrap.onpointermove = (e) => show(e.clientX);
-  wrap.onpointerleave = () => { cursor.hidden = true; readout.textContent = `${fmtDate(last.date)} · ${money(last.value)}`; };
+  rest$();
+  box.innerHTML = `${chart.html}<div class="lc-legend small muted"><span><i class="sw" style="background:${color}"></i>Value</span><span><i class="sw dashed"></i>Invested</span></div>`;
+  bindScrub(box, chart, {
+    onMove: (i) => {
+      const p = pts[i];
+      label.textContent = `Investments · ${fmtDate(p.date)}`;
+      hero.innerHTML = bigMoney(p.value, base());
+      sub.innerHTML = `${subLine(gainBetween(first, p), `since ${fmtDate(first.date, { month: 'short', day: 'numeric' })}`)} <span class="muted">· ${money(p.invested)} invested</span>`;
+    },
+    onEnd: rest$,
+  });
+}
+
+function openCash() {
+  const c = cash();
+  openSheet('Cash', `
+    <form class="form" id="cash-form" novalidate>
+      <div class="field"><label for="cash-amt">Cash on hand (${base()})</label><input id="cash-amt" name="amount" type="number" inputmode="decimal" step="any" min="0" value="${c.amount || ''}" placeholder="0.00"></div>
+      <label class="check"><input type="checkbox" name="show"${c.show ? ' checked' : ''}><span>Show in portfolio value</span></label>
+      <button class="btn primary block" type="submit">Save</button>
+    </form>`, (body, close) => {
+    const f = $('#cash-form', body);
+    f.onsubmit = (e) => {
+      e.preventDefault();
+      const amount = Math.max(0, parseFloat(f.amount.value) || 0);
+      store.update((s) => { s.cash = { amount: round(amount), show: f.show.checked }; });
+      close();
+    };
+    f.amount.focus();
+  });
+}
+
+// Asset detail: price chart with scrubbing, and your position (Revolut / Trading 212 style)
+const SERIES_RANGES = [['1w', '1W', 7], ['1m', '1M', 30], ['3m', '3M', 91], ['6m', '6M', 182], ['1y', '1Y', 365]];
+function openAsset(id) {
+  const a = assetById(id);
+  if (!a) return;
+  const ccy = a.currency || 'USD';
+  const q = market.quote(id);
+  const price = q?.price ?? null;
+  const h = holdings(store.state.transactions, priceOf, athOf).rows.find((r) => r.assetId === id && r.qty > 0);
+  const ta = toAthPct(id);
+  const day = h && q?.change != null ? toBase(id, q.change) * h.qty : null;
+  let range = '1m';
+  openSheet(a.name, `
+    <div class="detail">
+      <div class="detail-id">${avatar(id)}<span class="eyebrow">${esc(a.symbol)} · ${KINDS[a.kind] || esc(a.kind)}</span></div>
+      <div class="perf-title">
+        <span class="eyebrow" id="ad-label">Price</span>
+        <strong class="hero num" id="ad-price">${price != null ? bigMoney(price, ccy) : bigMoney(priceOf(id), base())}</strong>
+        <span class="perf-sub small num" id="ad-sub">${q?.changePct != null ? `<span class="${tone(q.changePct)}">${q.changePct >= 0 ? '▲' : '▼'} ${fmtSignedMoney(q.change, ccy)} (${fmtPct(q.changePct)})</span> <span class="muted">today</span>` : ''}</span>
+      </div>
+      <div id="ad-chart"><div class="skeleton" style="height:200px"></div></div>
+      <div class="ranges" role="radiogroup" aria-label="Chart range">${SERIES_RANGES.map(([v, l]) => `<label><input type="radio" name="ad-range" value="${v}"${v === range ? ' checked' : ''}><span>${l}</span></label>`).join('')}</div>
+      ${h ? `<h3 class="eyebrow">Your investment</h3><div class="box">
+        ${statRow('Value', money(h.value))}
+        ${statRow('Return', `<span class="${tone(h.pl)}">${smoney(h.pl)} (${fmtPct(h.plPct)})</span>`)}
+        ${day != null ? statRow('Today', `<span class="${tone(day)}">${smoney(day)}</span>`) : ''}
+        ${statRow('Shares', fmtNum(h.qty, 8))}
+        ${statRow('Average price', money(h.avg))}
+        ${h.realized ? statRow('Realized', `<span class="${tone(h.realized)}">${smoney(h.realized)}</span>`) : ''}
+        ${statRow('To ATH', ta == null ? '-' : ta < 0.01 ? 'At ATH' : fmtPct(ta))}
+        ${statRow('Value at ATH', money(h.valueAtAth))}
+      </div>` : `<div class="box">${statRow('All-time high', market.ath(id)?.ath ? fmtMoney(market.ath(id).ath, ccy) : '-')}${statRow('To ATH', ta == null ? '-' : ta < 0.01 ? 'At ATH' : fmtPct(ta))}</div>`}
+      <div class="detail-actions">
+        ${h ? `<button class="btn block" type="button" id="ad-sell">Sell</button>` : ''}
+        <button class="btn primary block" type="button" id="ad-buy">Buy</button>
+        <button class="icon-btn" type="button" id="ad-ai" aria-label="Analyze with AI">${icon('sparkles')}</button>
+      </div>
+    </div>`, (body) => {
+    $('#ad-buy', body).onclick = () => openTx({ assetId: id });
+    $('#ad-sell', body)?.addEventListener('click', () => openTx({ assetId: id, type: 'sell' }));
+    $('#ad-ai', body).onclick = () => { $('#sheet').close(); ui.aiAsset = id; location.hash = 'ai'; analyzeAsset(id); };
+    const box = $('#ad-chart', body);
+    let series = null;
+    const draw = () => {
+      if (!series) return;
+      const days = SERIES_RANGES.find((r) => r[0] === range)[2];
+      const from = isoDaysAgo(days);
+      let pts = series.filter((p) => p.date >= from);
+      if (price != null && pts.length && pts[pts.length - 1].date < todayISO()) pts = [...pts, { date: todayISO(), close: price }];
+      if (pts.length < 2) { box.innerHTML = '<p class="muted small chart-empty">Not enough history.</p>'; return; }
+      const f0 = pts[0].close, lastPx = pts[pts.length - 1].close;
+      const color = lastPx >= f0 ? 'var(--success)' : 'var(--danger)';
+      const avgLocal = h && market.fxRate(ccy, base()) ? h.avg / market.fxRate(ccy, base()) : null;
+      const closes = pts.map((p) => p.close);
+      // Draw the average-price line only when it doesn't flatten the price line
+      const avgInView = avgLocal && avgLocal > Math.min(...closes) * 0.85 && avgLocal < Math.max(...closes) * 1.15;
+      const chart = lineChart([
+        { values: closes, color, fill: true },
+        ...(avgInView ? [{ values: pts.map(() => avgLocal), color: 'var(--muted)', dash: true }] : []),
+      ], { height: 200, label: `${a.name} price` });
+      box.innerHTML = chart.html + (avgLocal ? `<div class="lc-legend small muted"><span><i class="sw dashed"></i>Your average ${fmtMoney(avgLocal, ccy)}</span></div>` : '');
+      const lab = $('#ad-label', body), pr = $('#ad-price', body), sb = $('#ad-sub', body);
+      const restHtml = { lab: lab.textContent, pr: pr.innerHTML, sb: sb.innerHTML };
+      bindScrub(box, chart, {
+        onMove: (i) => {
+          const p = pts[i], ch = p.close - f0;
+          lab.textContent = fmtDate(p.date);
+          pr.innerHTML = bigMoney(p.close, ccy);
+          sb.innerHTML = `<span class="${tone(ch)}">${ch >= 0 ? '▲' : '▼'} ${fmtSignedMoney(ch, ccy)} (${fmtPct((ch / f0) * 100)})</span> <span class="muted">since ${fmtDate(pts[0].date, { month: 'short', day: 'numeric' })}</span>`;
+        },
+        onEnd: () => { lab.textContent = restHtml.lab; pr.innerHTML = restHtml.pr; sb.innerHTML = restHtml.sb; },
+      });
+    };
+    $$('[name=ad-range]', body).forEach((r) => (r.onchange = () => { range = r.value; draw(); }));
+    if (a.source === 'none') { box.innerHTML = '<p class="muted small chart-empty">No price history for this listing.</p>'; return; }
+    market.getSeries(a).then((s) => { series = s; draw(); })
+      .catch((e) => { box.innerHTML = `<p class="muted small chart-empty">${esc(e.message)}</p>`; });
+  });
 }
 
 function renderTx() {
@@ -454,7 +629,7 @@ function renderTx() {
   if (!box) return;
   const all = store.state.transactions;
   if (!port.txOpen) {
-    box.innerHTML = `<div class="tx-head"><h2>Transactions</h2><button class="btn" type="button" data-act="tx-toggle">Show transactions (${all.length})</button></div>`;
+    box.innerHTML = `<div class="tx-head"><h2 class="eyebrow">Transactions</h2><button class="btn small" type="button" data-act="tx-toggle">Show ${all.length}</button></div>`;
     return;
   }
   const q = port.q.trim().toLowerCase();
@@ -476,14 +651,14 @@ function renderTx() {
   const typeLabel = { buy: 'Buy', sell: 'Sell', split: 'Split' };
 
   box.innerHTML = `
-    <div class="tx-head"><h2>Transactions</h2><button class="btn ghost" type="button" data-act="tx-toggle">Hide</button></div>
+    <div class="tx-head"><h2 class="eyebrow">Transactions</h2><button class="btn ghost small" type="button" data-act="tx-toggle">Hide</button></div>
     <div class="tx-filters">
       <div class="field"><label for="tx-q">Search</label><input id="tx-q" type="search" value="${esc(port.q)}" placeholder="Asset, ticker or note" autocomplete="off"></div>
       <div class="field"><label for="tx-f-asset">Asset</label><select id="tx-f-asset">${opt('', 'All assets', port.asset)}${withTx.map((a) => opt(a.id, a.name, port.asset)).join('')}</select></div>
       <div class="field"><label for="tx-f-type">Type</label><select id="tx-f-type">${opt('', 'All types', port.type)}${opt('buy', 'Buys', port.type)}${opt('sell', 'Sells', port.type)}${opt('split', 'Splits and spin-offs', port.type)}</select></div>
       <div class="field"><label for="tx-f-sort">Sort</label><select id="tx-f-sort">${opt('new', 'Newest first', port.txSort)}${opt('old', 'Oldest first', port.txSort)}${opt('big', 'Largest amount', port.txSort)}${opt('small', 'Smallest amount', port.txSort)}</select></div>
     </div>
-    <p class="small muted">${list.length} of ${all.length} transactions${list.length ? ` · ${money(list.reduce((s, t) => s + (t.type === "buy" ? amount(t) : t.type === "sell" ? -amount(t) : 0), 0))} net (buys minus sells)` : ''}</p>
+    <p class="small muted num">${list.length} of ${all.length}${list.length ? ` · ${money(list.reduce((s, t) => s + (t.type === "buy" ? amount(t) : t.type === "sell" ? -amount(t) : 0), 0))} net bought` : ''}</p>
     ${pageItems.length ? `<ul class="tx-list">${pageItems.map((t) => `
       <li data-id="${t.id}">
         <span class="chip ${t.type}">${typeLabel[t.type] || t.type}</span>
@@ -511,7 +686,7 @@ function renderTx() {
   $('#tx-f-sort', box).onchange = refilter((v) => (port.txSort = v));
 }
 
-function openTx({ assetId } = {}) {
+function openTx({ assetId, type = 'buy' } = {}) {
   const assets = store.state.assets;
   if (!assets.length) return toast('Add an asset in Markets first.');
   const first = assetId || assets[0].id;
@@ -519,7 +694,7 @@ function openTx({ assetId } = {}) {
   openSheet('Log transaction', `
     <form class="form" id="tx-form" novalidate>
       <div class="field"><span class="label" id="tx-type-label">Type</span>
-        <div class="seg" role="radiogroup" aria-labelledby="tx-type-label"><label><input type="radio" name="type" value="buy" checked><span>Buy</span></label><label><input type="radio" name="type" value="sell"><span>Sell</span></label></div></div>
+        <div class="seg" role="radiogroup" aria-labelledby="tx-type-label"><label><input type="radio" name="type" value="buy"${type === 'buy' ? ' checked' : ''}><span>Buy</span></label><label><input type="radio" name="type" value="sell"${type === 'sell' ? ' checked' : ''}><span>Sell</span></label></div></div>
       <div class="field"><label for="tx-asset">Asset</label><select id="tx-asset" name="assetId">${assetOptions(first)}</select></div>
       <div class="field"><label for="tx-date">Date</label><input id="tx-date" name="date" type="date" value="${todayISO()}" max="${todayISO()}" required></div>
       <div class="row-2">
@@ -530,7 +705,6 @@ function openTx({ assetId } = {}) {
         <div class="field"><label for="tx-qty">Quantity</label><input id="tx-qty" name="qty" type="number" inputmode="decimal" step="any" min="0"></div>
         <div class="field"><label for="tx-fee">Fee (${base()})</label><input id="tx-fee" name="fee" type="number" inputmode="decimal" step="any" min="0" value="0"></div>
       </div>
-      <p class="hint">Enter the amount or the quantity; the other is calculated from the price.</p>
       <p class="form-error" id="tx-error" role="alert"></p>
       <button class="btn primary block" type="submit">Save transaction</button>
     </form>`, (body, close) => {
@@ -717,8 +891,8 @@ const currentPlan = () => store.state.plans.find((p) => p.id === ui.planId) || s
 function renderPlan(el) {
   const plan = currentPlan();
   if (!plan) {
-    el.innerHTML = emptyState('Plan how you deploy capital',
-      'Set how much to invest, for how long and how often, then split each buy across assets with a pie.',
+    el.innerHTML = emptyState('No plans yet',
+      'Split a recurring buy across assets.',
       `<button class="btn primary" type="button" data-act="new-plan">${icon('plus')}Create a plan</button>`);
     return;
   }
@@ -736,14 +910,14 @@ function renderPlan(el) {
       <section class="card form">
         <h2>Setup</h2>
         <div class="field"><label for="p-name">Plan name</label><input id="p-name" name="name" value="${esc(plan.name)}" autocomplete="off"></div>
-        <div class="field"><span class="label" id="mode-label">How do you want to invest?</span>
+        <div class="field"><span class="label" id="mode-label">Mode</span>
           <div class="seg" role="radiogroup" aria-labelledby="mode-label">
             <label><input type="radio" name="mode" value="total"${plan.mode === 'total' ? ' checked' : ''}><span>Spread a total</span></label>
-            <label><input type="radio" name="mode" value="fixed"${plan.mode === 'fixed' ? ' checked' : ''}><span>Fixed amount per buy</span></label>
+            <label><input type="radio" name="mode" value="fixed"${plan.mode === 'fixed' ? ' checked' : ''}><span>Fixed per buy</span></label>
           </div></div>
         ${plan.mode === 'total'
-          ? `<div class="field"><label for="p-capital">Total capital to invest (${base()})</label><input id="p-capital" name="capital" type="number" inputmode="decimal" min="0" step="any" value="${plan.capital}"></div>`
-          : `<div class="field"><label for="p-amount">Amount per buy, X (${base()})</label><input id="p-amount" name="amount" type="number" inputmode="decimal" min="0" step="any" value="${plan.amount}"></div>`}
+          ? `<div class="field"><label for="p-capital">Total (${base()})</label><input id="p-capital" name="capital" type="number" inputmode="decimal" min="0" step="any" value="${plan.capital}"></div>`
+          : `<div class="field"><label for="p-amount">Per buy (${base()})</label><input id="p-amount" name="amount" type="number" inputmode="decimal" min="0" step="any" value="${plan.amount}"></div>`}
         <div class="row-2">
           <div class="field"><label for="p-dur">Invest over</label><input id="p-dur" name="durationValue" type="number" inputmode="numeric" min="1" step="1" value="${plan.durationValue}"></div>
           <div class="field"><label for="p-unit">Unit</label><select id="p-unit" name="durationUnit"><option value="weeks"${plan.durationUnit === 'weeks' ? ' selected' : ''}>Weeks</option><option value="months"${plan.durationUnit === 'months' ? ' selected' : ''}>Months</option></select></div>
@@ -754,7 +928,7 @@ function renderPlan(el) {
         </div>
       </section>
       <section class="card">
-        <h2>Allocation pie</h2>
+        <h2>Allocation</h2>
         <div class="alloc">
           <div id="plan-donut"></div>
           <div class="alloc-rows">
@@ -777,7 +951,7 @@ function renderPlan(el) {
       </section>
     </form>
     <section class="card" id="plan-results" aria-live="polite"></section>
-    <section class="card"><h2>Schedule</h2><p class="small muted">"Log buys" records one buy per asset at the current price. If your actual fill was different, delete it in Portfolio and log it again.</p><ul class="schedule" id="plan-schedule"></ul></section>`;
+    <section class="card"><h2>Schedule</h2><ul class="schedule" id="plan-schedule"></ul></section>`;
 
   $('#plan-pick', el)?.addEventListener('change', (e) => { ui.planId = e.target.value; render(); });
   const form = $('#plan-form', el);
@@ -826,7 +1000,7 @@ function updatePlanResults() {
   if (d) d.innerHTML = donut(segs, { label: 'Plan allocation', center: s.perBuy ? money(s.perBuy) : '' });
 
   if (!s.n) {
-    res.innerHTML = `<h2>Result</h2><p class="muted">Set a duration of at least 1 and a start date to see the schedule.</p>`;
+    res.innerHTML = `<h2>Result</h2><p class="muted">Set a duration and start date.</p>`;
     $('#plan-schedule').innerHTML = '';
     return;
   }
@@ -839,7 +1013,7 @@ function updatePlanResults() {
       <div class="kpi"><span class="label">Last buy</span><strong class="num">${fmtDate(s.end)}</strong></div>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Asset</th><th class="r">Share</th><th class="r">Per buy</th><th class="r">Over plan</th><th class="r">Units per buy now</th></tr></thead>
+      <thead><tr><th>Asset</th><th class="r">Share</th><th class="r">Per buy</th><th class="r">Over plan</th><th class="r">Units now</th></tr></thead>
       <tbody>${s.allocations.map((a) => `<tr><td><span class="dot" style="background:${assetColor(a.assetId)}"></span>${esc(assetName(a.assetId))}</td>
         <td class="r num">${fmtPct(+a.pct || 0, { signed: false, digits: 1 })}</td><td class="r num">${money(a.amount)}</td><td class="r num">${money(a.total)}</td>
         <td class="r num">${a.units != null ? fmtNum(a.units, 6) : '-'}</td></tr>`).join('')}</tbody>
@@ -924,7 +1098,7 @@ function appData() {
 }
 
 function systemPrompt() {
-  return `You are the analyst inside TRING (Trading + Thinking), a personal app for tracking assets, all-time highs, a portfolio and DCA investment plans. Today is ${todayISO()}.
+  return `You are the analyst inside TRING, a personal app for tracking assets, all-time highs, a portfolio and DCA investment plans. Today is ${todayISO()}.
 
 The user's app data is below; use it for any question about their assets, portfolio or plans.
 
@@ -943,7 +1117,7 @@ function activeLine() {
   const p = PROVIDERS[k];
   const model = p.models.find((m) => m.id === modelFor(k))?.label || modelFor(k);
   const left = serverKeys() ? ` · ${Math.max(0, cloud.info.limit - cloud.info.used)} of ${cloud.info.limit} requests left today` : '';
-  return `<p class="active-ai small"><span class="live-dot" aria-hidden="true"></span>Active: <strong>${p.label}</strong> · ${esc(model)}${left} · <a href="#settings">Change</a></p>`;
+  return `<p class="active-ai small"><span class="live-dot" aria-hidden="true"></span><strong>${p.label}</strong> · ${esc(model)}${left} · <a href="#settings">Change</a></p>`;
 }
 
 function renderAI(el) {
@@ -955,16 +1129,16 @@ function renderAI(el) {
   el.innerHTML = `
     <section class="card ai-controls">
       ${active ? `<div class="field">
-          ${list.length > 1 ? `<span class="label" id="prov-label">AI provider</span>
+          ${list.length > 1 ? `<span class="label" id="prov-label">Provider</span>
           <div class="seg full" role="radiogroup" aria-labelledby="prov-label">${list.map((k) =>
             `<label><input type="radio" name="provider" value="${k}"${k === active ? ' checked' : ''}><span>${PROVIDERS[k].label}</span></label>`).join('')}</div>` : ''}
           ${activeLine()}</div>
         <label class="check"><input type="checkbox" id="web-toggle"${st.web && p.web ? ' checked' : ''}${p.web ? '' : ' disabled'}>
-          <span>Search the web for news${p.web ? '' : ` (not available with ${p.label})`}</span></label>`
-      : `<div class="banner">${icon('alert')}<div><strong>No AI connected</strong><p>${serverKeys() ? 'No AI provider is enabled on the server yet.' : 'Add your own API key for Claude, ChatGPT, Gemini or DeepSeek in Settings.'}</p></div>${serverKeys() ? '' : '<a class="btn" href="#settings">Open Settings</a>'}</div>`}
+          <span>Web search${p.web ? '' : ` (not on ${p.label})`}</span></label>`
+      : `<div class="banner">${icon('alert')}<div><strong>No AI connected</strong><p>${serverKeys() ? 'No provider enabled on the server.' : 'Add an API key in Settings.'}</p></div>${serverKeys() ? '' : '<a class="btn" href="#settings">Open Settings</a>'}</div>`}
       <div class="quick">
         <div class="field inline grow"><label for="ai-asset">Asset</label><select id="ai-asset">${assetOptions(ui.aiAsset || store.state.assets[0]?.id)}</select></div>
-        <button class="btn" type="button" data-act="ai-analyze"${off}>${icon('sparkles', 18)}Analyze asset</button>
+        <button class="btn" type="button" data-act="ai-analyze"${off}>${icon('sparkles', 18)}Analyze</button>
         <button class="btn" type="button" data-act="ai-portfolio"${off}>Review portfolio</button>
         <button class="btn" type="button" data-act="ai-plan"${off}>Review plan</button>
       </div>
@@ -972,7 +1146,7 @@ function renderAI(el) {
     <section class="chat card" id="chat-log" aria-live="polite"></section>
     <form id="chat-form" class="composer">
       <label class="sr-only" for="chat-input">Message</label>
-      <textarea id="chat-input" rows="2" placeholder="Ask anything, e.g. What is my portfolio worth if BTC returns to its ATH?"></textarea>
+      <textarea id="chat-input" rows="2" placeholder="Ask about your portfolio"></textarea>
       <button class="btn primary" type="submit" aria-label="Send"${off}>${icon('send', 18)}</button>
     </form>`;
 
@@ -997,7 +1171,7 @@ function renderChat() {
   const log = $('#chat-log');
   if (!log) return;
   if (!chat.length && !ui.busy) {
-    log.innerHTML = `<div class="chat-empty"><h2>Ask TRING</h2><p class="muted">The AI sees your assets, prices, ATHs, holdings and plans. Use it for pattern and sentiment reads, news that explains a move, or any calculation the app doesn't have yet.</p></div>`;
+    log.innerHTML = `<div class="chat-empty"><h2>Ask TRING</h2><p class="muted">It sees your assets, holdings and plans.</p></div>`;
     return;
   }
   log.innerHTML = chat.map((m) => {
@@ -1119,23 +1293,22 @@ function renderSettings(el) {
         ${serverKeys() ? '' : keyField(`s-key-${k}`, 'API key', st.keys[k], `<a href="${p.keyUrl}" target="_blank" rel="noopener">Get a key</a>`)}
         <div class="field"><label for="s-model-${k}">Model</label><select id="s-model-${k}">${p.models.map((m) => `<option value="${m.id}"${m.id === modelFor(k) ? ' selected' : ''}>${esc(m.label)}</option>`).join('')}</select></div>
         ${k === 'claude' ? `<div class="field"><label for="s-claude-effort">Effort</label><select id="s-claude-effort">${['low', 'medium', 'high', 'xhigh', 'max'].map((e) => `<option value="${e}"${e === st.claudeEffort ? ' selected' : ''}>${e[0].toUpperCase() + e.slice(1)}${e === 'medium' ? ' (recommended)' : ''}</option>`).join('')}</select>
-          <p class="hint">Higher effort thinks longer and costs more. Not used by Haiku 4.5.</p></div>` : ''}
+          </div>` : ''}
         ${k === 'claude' && !serverKeys() ? `<div class="field"><label for="s-claude-ws">Workspace ID (optional)</label>
           <input id="s-claude-ws" autocomplete="off" spellcheck="false" value="${esc(st.claudeWorkspace)}" placeholder="wrkspc_...">
-          <p class="hint">Only if Claude says the key is not tied to a workspace.</p></div>` : ''}
+</div>` : ''}
       </div></div>`;
   };
   const dataCard = `
     <section class="card form">
       <h2>Data</h2>
-      <p class="small muted">Back up or move your data as a JSON file.</p>
       <div class="btn-row">
         <button class="btn" type="button" data-act="export">${icon('download', 18)}Export</button>
         <button class="btn" type="button" data-act="import">${icon('upload', 18)}Import</button>
         <input type="file" id="import-file" accept="application/json,.json" hidden>
       </div>
     </section>
-    <p class="footnote">TRING v1 · Market data from Twelve Data and CoinGecko. AI output can be wrong; check it before acting on it.</p>`;
+`;
 
   const own = serverKeys();
   const info = cloud.info;
@@ -1143,27 +1316,26 @@ function renderSettings(el) {
     <section class="card form">
       <h2>Account</h2>
       <p>Signed in as <strong>${esc(cloud.user?.email)}</strong></p>
-      ${own && info ? `<p class="small muted">Using the owner's server keys. AI requests today: ${info.used} of ${info.limit}. Resets at midnight UTC.</p>` : ''}
+      ${own && info ? `<p class="small muted num">AI requests today: ${info.used} of ${info.limit}</p>` : ''}
       <p class="small" id="sync-detail">${esc(syncDetail())}</p>
       <div class="btn-row"><button class="btn" type="button" data-act="sign-out">Sign out</button></div>
     </section>` : '';
   const marketCard = hosted ? '' : `
     <section class="card form">
       <h2>Market data</h2>
-      ${keyField('s-twelve', 'Twelve Data API key', st.twelveKey, 'Needed for stocks, ETFs, indices, gold and FX. Free key at <a href="https://twelvedata.com/pricing" target="_blank" rel="noopener">twelvedata.com</a> (8 requests per minute). Crypto uses CoinGecko and needs no key.')}
+      ${keyField('s-twelve', 'Twelve Data API key', st.twelveKey, '<a href="https://twelvedata.com/pricing" target="_blank" rel="noopener">Get a free key</a>')}
     </section>`;
   const aiCard = `
     <section class="card form">
       <h2>${own ? 'AI' : 'AI providers'}</h2>
       ${own
         ? (available.length ? available.map(providerBlock).join('') : '<p class="muted">No AI provider is enabled on the server yet.</p>')
-        : `<p class="small muted">Use your own API keys. They stay on this device and are sent only to their own provider, never to TRING's server or other users. Add at least one; the provider marked Active answers in the AI tab.</p>
+        : `<p class="small muted">Keys stay on this device.</p>
            ${Object.keys(PROVIDERS).map(providerBlock).join('')}`}
     </section>`;
   const syncCard = hosted ? '' : `
     <section class="card form">
       <h2>Cloud sync</h2>
-      <p class="small muted">Syncs assets, transactions, plans and snapshots through your own Google Apps Script. Setup steps are in README.md.</p>
       <div class="field"><label for="s-sync-url">Web app URL</label><input id="s-sync-url" type="url" inputmode="url" autocomplete="off" value="${esc(st.syncUrl)}" placeholder="https://script.google.com/macros/s/.../exec"></div>
       ${keyField('s-sync-token', 'Sync token', st.syncToken, '')}
       <p class="small" id="sync-detail">${esc(syncDetail())}</p>
@@ -1220,11 +1392,8 @@ const ACTIONS = {
   analyze: (id) => { ui.aiAsset = id; location.hash = 'ai'; analyzeAsset(id); },
   buy: (id) => openTx({ assetId: id }),
   'add-tx': () => openTx(),
-  'hold-sort': (_, btn) => {
-    const k = btn.dataset.key;
-    port.sort = port.sort.key === k ? { key: k, dir: -port.sort.dir } : { key: k, dir: k === 'name' || k === 'toAth' ? 1 : -1 };
-    render();
-  },
+  'open-asset': (id) => openAsset(id),
+  cash: () => openCash(),
   'tx-toggle': () => { port.txOpen = !port.txOpen; renderTx(); },
   'tx-page': (_, btn) => { port.page = +btn.dataset.page; renderTx(); $('#tx-section')?.scrollIntoView({ block: 'start', behavior: 'smooth' }); },
   'perf-retry': () => { perf.promise = null; loadPerf(); renderPerf(); },
@@ -1296,16 +1465,15 @@ function showGate(html) {
   const g = $('#gate');
   g.hidden = false;
   g.innerHTML = `<div class="gate-card card">
-    <div class="gate-brand"><img src="icon.svg" width="56" height="56" alt=""><div><h1>TRING</h1><p class="muted">Trading + Thinking</p></div></div>
+    <div class="gate-brand"><img src="icon.svg" width="56" height="56" alt=""><h1>TRING</h1></div>
     ${html}</div>`;
 }
 
 function showLogin(error = '') {
   showGate(`
-    <p>Track assets against their all-time highs, plan your buys and ask AI about it.</p>
     <button class="btn block google" type="button" id="google-btn">${GOOGLE_G}Continue with Google</button>
     ${error ? `<p class="form-error" role="alert">${esc(error)}</p>` : ''}
-    <p class="small muted">Access is invite-only. Ask the owner to add your Google email.</p>`);
+    <p class="small muted">Invite only.</p>`);
   $('#google-btn').onclick = async (e) => {
     e.currentTarget.disabled = true;
     try { await signInWithGoogle(); } catch (ex) { showLogin(ex.message); }

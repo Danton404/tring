@@ -155,9 +155,9 @@ export async function resolveIsin({ isin, tickers, refPriceEur, yahooOnly = fals
   return null;
 }
 
-// Weekly closes for the portfolio history chart: { ccy, points: [{ date, v }] }
-export async function weeklyHistory(symbol) {
-  const { meta, points } = await yahooChart(symbol, '5y', '1wk');
+// Daily closes for the portfolio history chart: { ccy, points: [{ date, v }] }
+export async function dailyHistory(symbol) {
+  const { meta, points } = await yahooChart(symbol, '5y', '1d');
   // London quotes in pence
   const pence = meta.currency === 'GBp' || meta.currency === 'GBX';
   return {
@@ -255,20 +255,20 @@ export async function refreshAll(assets, { force = false, onUpdate, base = 'USD'
 }
 
 // Daily closes, oldest first: [{ date, close }]
-export async function getSeries(asset, days = 200) {
+export async function getSeries(asset, days = 365) {
   const hit = cache.series[asset.id];
   if (hit && !stale(hit, TTL.series)) return hit.points;
   let points;
   if (asset.source === 'coingecko') {
     const d = await gecko(`coins/${asset.cgId}/market_chart`, { vs_currency: 'usd', days, interval: 'daily' });
     points = (d.prices || []).map(([t, p]) => ({ date: new Date(t).toISOString().slice(0, 10), close: p }));
-  } else if (asset.source === 'yahoo') {
-    const { points: p } = await yahooChart(asset.yahoo, '1y', '1d');
+  } else if (asset.source === 'yahoo' || asset.histSymbol) {
+    const { points: p } = await yahooChart(asset.yahoo || asset.histSymbol, '1y', '1d');
     points = p.filter((x) => x.close).map((x) => ({ date: new Date(x.t * 1000).toISOString().slice(0, 10), close: x.close })).slice(-days);
-  } else {
+  } else if (asset.source === 'twelve') {
     const d = await twelve('time_series', { symbol: asset.symbol, interval: '1day', outputsize: days });
     points = (d.values || []).map((v) => ({ date: v.datetime.slice(0, 10), close: +v.close })).reverse();
-  }
+  } else throw new Error('No price history for this listing.');
   cache.series[asset.id] = { points, ts: Date.now() };
   persist();
   return points;

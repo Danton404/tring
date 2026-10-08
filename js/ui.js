@@ -64,6 +64,9 @@ const ICONS = {
   check: '<path d="M20 6 9 17l-5-5"/>',
   alert: '<circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/>',
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  banknote: '<rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01M18 12h.01"/>',
+  chevron: '<path d="m9 18 6-6-6-6"/>',
   upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/>',
 };
 
@@ -130,23 +133,107 @@ export function donut(segments, { size = 168, thickness = 22, label = 'Allocatio
   </svg>`;
 }
 
-export function lineChart(series, { height = 180, label = 'Chart' } = {}) {
-  const W = 600, H = height, pad = 8;
-  const all = series.flatMap((s) => s.values).filter((v) => v != null);
+// Line chart: tone-coloured line over a faint grid, soft gradient fill, end dot.
+// Returns { html, values } for bindScrub; the first series is the one the cursor follows.
+let chartSeq = 0;
+export function lineChart(series, { height = 220, label = 'Chart', grid = true } = {}) {
+  const W = 600, H = height;
+  const all = series.flatMap((s) => s.values).filter((v) => v != null && isFinite(v));
   const n = Math.max(...series.map((s) => s.values.length));
-  if (n < 2 || !all.length) return '';
+  if (n < 2 || !all.length) return { html: '', values: [] };
   let min = Math.min(...all), max = Math.max(...all);
   if (min === max) { min -= 1; max += 1; }
   const span = max - min;
-  min -= span * 0.08; max += span * 0.08;
-  const x = (i) => pad + (i * (W - 2 * pad)) / (n - 1);
-  const y = (v) => H - pad - ((v - min) / (max - min)) * (H - 2 * pad);
-  const paths = series.map((s) => {
+  min -= span * 0.06; max += span * 0.14;
+  const x = (i) => (i * W) / (n - 1);
+  const y = (v) => H - ((v - min) / (max - min)) * H;
+  const id = `lc${++chartSeq}`;
+  const lines = grid
+    ? [1, 2, 3, 4, 5].map((k) => `<line x1="${(k * W) / 6}" x2="${(k * W) / 6}" y1="0" y2="${H}"/>`).join('') +
+      [1, 2, 3].map((k) => `<line x1="0" x2="${W}" y1="${(k * H) / 4}" y2="${(k * H) / 4}"/>`).join('')
+    : '';
+  const paths = series.map((s, si) => {
     const d = s.values.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(' ');
-    const area = s.fill ? `<path d="${d} L${x(s.values.length - 1)} ${H} L${x(0)} ${H} Z" fill="${s.color}" opacity="0.1"/>` : '';
-    return `${area}<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"${s.dash ? ' stroke-dasharray="5 4"' : ''}/>`;
+    const area = s.fill
+      ? `<path d="${d} L${x(s.values.length - 1)} ${H} L0 ${H} Z" fill="url(#${id}-g${si})" stroke="none"/>
+         <defs><linearGradient id="${id}-g${si}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${s.color}" stop-opacity="0.28"/><stop offset="1" stop-color="${s.color}" stop-opacity="0"/></linearGradient></defs>`
+      : '';
+    return `${area}<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.dash ? 1.25 : 2}" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"${s.dash ? ' stroke-dasharray="3 4" opacity="0.7"' : ''}/>`;
   }).join('');
-  return `<svg class="line-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${esc(label)}">${paths}</svg>`;
+  const main = series[0];
+  const pos = main.values.map((v, i) => ({ l: (x(i) / W) * 100, t: (y(v) / H) * 100 }));
+  const last = pos[pos.length - 1];
+  return {
+    values: main.values,
+    pos,
+    html: `<div class="lc" style="--lc-h:${height}px;--lc-c:${main.color}">
+      <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${esc(label)}"><g class="lc-grid">${lines}</g>${paths}</svg>
+      <span class="lc-end" style="left:${last.l}%;top:${last.t}%"></span>
+      <span class="lc-cursor" hidden></span><span class="lc-dot" hidden></span>
+    </div>`,
+  };
+}
+
+// Drag / hover scrubbing. Mouse follows hover; touch follows the finger while it's down.
+export function bindScrub(root, chart, { onMove, onEnd }) {
+  const wrap = root.querySelector('.lc');
+  if (!wrap || !chart.pos?.length) return;
+  const cursor = wrap.querySelector('.lc-cursor'), dot = wrap.querySelector('.lc-dot'), end = wrap.querySelector('.lc-end');
+  const n = chart.pos.length;
+  let down = false, lastI = -1;
+  const indexAt = (e) => {
+    const r = wrap.getBoundingClientRect();
+    return Math.max(0, Math.min(n - 1, Math.round(((e.clientX - r.left) / r.width) * (n - 1))));
+  };
+  const move = (e) => {
+    const i = indexAt(e);
+    if (i === lastI) return;
+    lastI = i;
+    const p = chart.pos[i];
+    cursor.hidden = dot.hidden = false;
+    end.hidden = true;
+    cursor.style.left = dot.style.left = `${p.l}%`;
+    dot.style.top = `${p.t}%`;
+    onMove(i);
+  };
+  const stop = () => {
+    down = false; lastI = -1;
+    cursor.hidden = dot.hidden = true;
+    end.hidden = false;
+    onEnd();
+  };
+  wrap.addEventListener('pointerdown', (e) => {
+    down = true;
+    try { wrap.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    move(e);
+  });
+  wrap.addEventListener('pointermove', (e) => { if (down || e.pointerType === 'mouse') move(e); });
+  wrap.addEventListener('pointerup', (e) => { if (e.pointerType === 'mouse') down = false; else stop(); });
+  wrap.addEventListener('pointercancel', stop);
+  wrap.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') stop(); });
+  // Long-press must not open the copy / image callout
+  wrap.addEventListener('contextmenu', (e) => e.preventDefault());
+  wrap.addEventListener('selectstart', (e) => e.preventDefault());
+}
+
+// Money with smaller decimals, e.g. €28,657<small>.89</small>
+export function bigMoney(n, currency) {
+  const s = fmtMoney(n, currency);
+  const k = s.lastIndexOf('.');
+  return k < 0 ? esc(s) : `${esc(s.slice(0, k))}<small>${esc(s.slice(k))}</small>`;
+}
+
+// Count-up tween for headline numbers (after React Bits' CountUp)
+export function countUp(el, from, to, render, ms = 600) {
+  if (from == null || to == null || from === to || matchMedia('(prefers-reduced-motion: reduce)').matches) { el.innerHTML = render(to); return; }
+  const t0 = performance.now();
+  const step = (t) => {
+    const k = Math.min(1, (t - t0) / ms);
+    const e = 1 - (1 - k) ** 3;
+    el.innerHTML = render(from + (to - from) * e);
+    if (k < 1 && el.isConnected) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
 }
 
 // ---------- Markdown (subset: headings, bold, italics, code, links, lists, tables, paragraphs)

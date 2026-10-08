@@ -1,4 +1,4 @@
-# TRING (Trading + Thinking)
+# TRING
 
 Personal PWA for tracking assets against their all-time highs, logging invested capital, planning DCA buys with an allocation pie, and analysing it all with Claude, ChatGPT or DeepSeek.
 

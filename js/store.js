@@ -15,7 +15,7 @@ const DEFAULT_ASSETS = [
 ];
 
 export function defaultState() {
-  return { schema: 1, updatedAt: 0, assets: structuredClone(DEFAULT_ASSETS), transactions: [], plans: [], snapshots: [] };
+  return { schema: 1, updatedAt: 0, assets: structuredClone(DEFAULT_ASSETS), transactions: [], plans: [], snapshots: [], cash: { amount: 0, show: false } };
 }
 
 const DEFAULT_SETTINGS = {
