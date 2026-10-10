@@ -136,11 +136,13 @@ export function donut(segments, { size = 168, thickness = 22, label = 'Allocatio
 }
 
 // Treemap (squarified): tiles sized by value, laid out to stay close to square.
-// items: [{ label, short, value, color, sub, subShort }] (short versions go in small tiles); sizes are % of the box, so it scales with its container.
+// items: [{ label, short, value, color, sub, subShort, details: [[label, valueHtml]] }].
+// width/height are the box's real size in px, so tiles meet exactly and text shows only where it fits.
+// Hover or focus pops a tile out with everything in `details` (small tiles grow so it all fits).
 export function treemap(items, { width = 520, height = 220, label = 'Allocation' } = {}) {
   const list = items.filter((i) => i.value > 0).sort((a, b) => b.value - a.value);
   const total = list.reduce((s, i) => s + i.value, 0);
-  if (!total) return '';
+  if (!total || width <= 0) return '';
   const nodes = list.map((i) => ({ ...i, area: (i.value / total) * width * height }));
   const out = [];
   const worst = (row, side) => {
@@ -169,12 +171,17 @@ export function treemap(items, { width = 520, height = 220, label = 'Allocation'
     else { rect = place(row, rect); row = []; }
   }
   if (row.length) place(row, rect);
-  const pct = (v, of) => `${((v / of) * 100).toFixed(3)}%`;
-  return `<div class="tm" role="img" aria-label="${esc(label)}">${out.map(({ n, x, y, w, h }) => {
-    // Text only where it fits: name and share in big tiles, share alone in small ones
-    const big = w > 150 && h > 70, mid = w > 70 && h > 38;
-    return `<div class="tm-cell" style="left:${pct(x, width)};top:${pct(y, height)};width:${pct(w, width)};height:${pct(h, height)};--c:${n.color}" title="${esc(`${n.label}: ${n.sub || ''}`)}">
-      <div class="tm-in">${big ? `<span class="tm-name">${esc(n.label)}</span>` : mid ? `<span class="tm-name">${esc(n.short || n.label)}</span>` : ''}${mid ? `<span class="tm-val">${esc((big ? n.sub : n.subShort || n.sub) || '')}</span>` : ''}</div></div>`;
+  const pct = (v, of) => `${((v / of) * 100).toFixed(4)}%`;
+  return `<div class="tm" role="list" aria-label="${esc(label)}" style="height:${height}px">${out.map(({ n, x, y, w, h }) => {
+    const size = w >= 140 && h >= 64 ? 'lg' : w >= 56 && h >= 40 ? 'md' : 'sm';
+    // Pop-outs grow toward the middle of the map so they stay inside it
+    const anchor = `${x + w / 2 > width / 2 ? ' ax-r' : ''}${y + h / 2 > height / 2 ? ' ay-b' : ''}`;
+    return `<div class="tm-cell ${size}${anchor}" role="listitem" tabindex="0" style="left:${pct(x, width)};top:${pct(y, height)};width:${pct(w, width)};height:${pct(h, height)};--c:${n.color}">
+      <div class="tm-in">
+        <span class="tm-name"><span class="tm-full">${esc(n.label)}</span><span class="tm-short">${esc(n.short || n.label)}</span></span>
+        <span class="tm-val num"><span class="tm-full">${esc(n.sub || '')}</span><span class="tm-short">${esc(n.subShort || n.sub || '')}</span></span>
+        ${n.details?.length ? `<dl class="tm-more">${n.details.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd class="num">${v}</dd></div>`).join('')}</dl>` : ''}
+      </div></div>`;
   }).join('')}</div>`;
 }
 

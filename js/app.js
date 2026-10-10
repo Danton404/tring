@@ -1207,31 +1207,40 @@ function newPlan() {
   render();
 }
 
+let treeObs;
 const currentPlan = () => store.state.plans.find((p) => p.id === ui.planId) || store.state.plans[0];
 
 // Target prices are in each asset's own currency (as on Markets) and default to the all-time high
 const nativePrice = (id) => market.quote(id)?.price ?? assetById(id)?.lastPrice ?? null;
 const athNative = (id) => (market.ath(id)?.partial ? null : market.ath(id)?.ath ?? null);
 const planMarkets = (plan) => [...new Set(plan.allocations.map((al) => marketOf(assetById(al.assetId))).filter(Boolean))];
-// Historical CAGR over the last 5 years (or the history there is): the default for CAGR predictions
-const hist = new Map(); // id -> undefined while loading, null when unavailable, { cagr, years }
-function histCagr(id) {
+// Historical CAGR over the last `years` of history (0 = all of it, or whatever history there is):
+// the default for CAGR predictions. Up to 5 years uses daily closes, longer uses weekly ones.
+const HIST_YEARS = [[1, '1 year'], [3, '3 years'], [5, '5 years'], [10, '10 years'], [0, 'All history']];
+const hist = new Map(); // `${id}:${years}` -> undefined while loading, null when unavailable, { cagr, years }
+function histCagr(id, years = 5) {
   const a = assetById(id);
   if (!a) return null;
-  if (!hist.has(id)) {
-    hist.set(id, undefined);
-    market.getLongSeries(a, '5y').then((pts) => {
+  const key = `${id}:${years}`;
+  if (!hist.has(key)) {
+    hist.set(key, undefined);
+    market.getLongSeries(a, years && years <= 5 ? '5y' : 'max').then((all) => {
+      const last = all[all.length - 1];
+      const from = years && last ? new Date(new Date(last.date).getTime() - years * 365.25 * 864e5).toISOString().slice(0, 10) : '';
+      const pts = all.filter((p) => p.date >= from && p.close > 0);
       const f = pts[0], l = pts[pts.length - 1];
       const yrs = f && l ? (new Date(l.date) - new Date(f.date)) / (365.25 * 864e5) : 0;
-      hist.set(id, yrs >= 0.9 && f.close > 0 ? { cagr: ((l.close / f.close) ** (1 / yrs) - 1) * 100, years: yrs } : null);
-    }).catch(() => hist.set(id, null)).finally(() => { if (ui.tab === 'plan') updatePlanResults(); });
+      hist.set(key, yrs >= 0.9 ? { cagr: ((l.close / f.close) ** (1 / yrs) - 1) * 100, years: yrs } : null);
+    }).catch(() => hist.set(key, null)).finally(() => { if (ui.tab === 'plan') updatePlanResults(); });
   }
-  return hist.get(id);
+  return hist.get(key);
 }
+const histYears = (plan) => plan.historyYears ?? 5;
+const yearsLabel = (y) => (y >= 1.5 ? `${Math.round(y)}Y` : `${y.toFixed(1)}Y`);
 const summarizePlan = (plan) => planSummary(plan, priceOf, {
   markets: planMarkets(plan),
   targetOf: (id, al) => (al.method === 'cagr'
-    ? { method: 'cagr', cagr: al.cagr ?? histCagr(id)?.cagr ?? null }
+    ? { method: 'cagr', cagr: al.cagr ?? histCagr(id, histYears(plan))?.cagr ?? null }
     : { method: 'target', price: nativePrice(id), target: al.target ?? athNative(id) }),
 });
 const planMethod = (plan) => {
@@ -1276,8 +1285,11 @@ function renderPlan(el) {
           <div class="field"><label for="p-freq">Buy frequency</label><select id="p-freq" name="frequency">${Object.entries(FREQS).map(([k, v]) => `<option value="${k}"${k === plan.frequency ? ' selected' : ''}>${v}</option>`).join('')}</select></div>
           <div class="field"><label for="p-start">First buy</label><input id="p-start" name="startDate" type="date" value="${plan.startDate}"></div>
         </div>
-        <div class="field"><label for="p-horizon">CAGR horizon (years)</label><input id="p-horizon" name="horizonYears" type="number" inputmode="decimal" min="1" max="50" step="any" value="${plan.horizonYears ?? 5}">
-          <p class="hint" id="p-horizon-hint"></p></div>
+        <div class="row-2">
+          <div class="field"><label for="p-hist">CAGR from history</label><select id="p-hist" name="historyYears">${HIST_YEARS.map(([v, l]) => `<option value="${v}"${v === histYears(plan) ? ' selected' : ''}>${l === 'All history' ? l : `Last ${l}`}</option>`).join('')}</select></div>
+          <div class="field"><label for="p-horizon">Project forward (years)</label><input id="p-horizon" name="horizonYears" type="number" inputmode="decimal" min="1" max="50" step="any" value="${plan.horizonYears ?? 5}"></div>
+        </div>
+        <p class="hint" id="p-horizon-hint"></p>
       </section>
       <section class="card">
         <div class="alloc-head"><h2>Allocation</h2>
@@ -1335,6 +1347,12 @@ function renderPlan(el) {
     savePlanForm(form);
     if (e.target.name === 'mode' || e.target.name.startsWith('al-m-')) render();
   });
+  treeObs?.disconnect();
+  treeObs = new ResizeObserver(() => {
+    const t = $('#plan-tree');
+    if (t && +t.dataset.w !== Math.round(t.clientWidth)) updatePlanResults();
+  });
+  treeObs.observe($('#plan-tree', el));
   $$('.alloc-row', form).forEach((row) => {
     const i = +row.dataset.i;
     bindCombo($('[name=al-q]', row), {
@@ -1373,6 +1391,7 @@ function savePlanForm(form) {
     p.frequency = form.frequency.value;
     p.startDate = form.startDate.value || todayISO();
     p.horizonYears = Math.max(0.5, parseFloat(form.horizonYears.value) || 5);
+    p.historyYears = parseInt(form.historyYears.value, 10) || 0;
     p.allocations = assetsSel.map((assetId, i) => ({ assetId, pct: pcts[i], target: targets[i], method: methods[i], cagr: cagrs[i] }));
   }, { silent: true });
   updatePlanResults();
@@ -1395,7 +1414,8 @@ function updatePlanResults() {
   // Inputs follow their defaults (ATH, historical CAGR) until you type your own; the projection under each one
   const by = s.horizon ? fmtDate(s.horizon, { month: 'short', year: 'numeric' }) : '';
   const hz = $('#p-horizon-hint');
-  if (hz) hz.textContent = s.horizon ? `For CAGR predictions: growth is counted to ${fmtDate(s.horizon)}.` : '';
+  const hy = histYears(plan);
+  if (hz) hz.textContent = s.horizon ? `CAGR defaults to each asset's ${hy ? `last ${hy} year${hy === 1 ? '' : 's'}` : 'full history'} (type your own to override) and compounds each buy until ${fmtDate(s.horizon)}.` : '';
   $$('.alloc-row').forEach((row) => {
     const i = +row.dataset.i, al = plan.allocations[i], r = s.allocations[i];
     if (!al || !r) return;
@@ -1403,12 +1423,12 @@ function updatePlanResults() {
     if (!al.assetId) { up.innerHTML = ''; return; }
     if (al.method === 'cagr') {
       const inp = $('[name=al-cagr]', row);
-      const h = histCagr(al.assetId);
+      const h = histCagr(al.assetId, histYears(plan));
       inp.dataset.default = h ? String(round(h.cagr, 1)) : '';
       if (al.cagr == null && document.activeElement !== inp) inp.value = inp.dataset.default;
       up.innerHTML = r.upside == null ? `<span class="muted">${h === undefined ? 'Loading history...' : 'Enter a CAGR'}</span>`
         : `<span class="num ${tone(r.upside)}">${fmtPct(r.upside)}</span> <span class="muted">by ${by}</span>${al.cagr != null && h
-          ? ` · <button type="button" class="link-btn muted" data-act="cagr-hist" data-i="${i}">Use history</button>` : al.cagr == null && h ? ` <span class="muted">· ${Math.round(h.years)}Y history</span>` : ''}`;
+          ? ` · <button type="button" class="link-btn muted" data-act="cagr-hist" data-i="${i}">Use history</button>` : al.cagr == null && h ? ` <span class="muted">· ${yearsLabel(h.years)} history</span>` : ''}`;
       return;
     }
     const inp = $('[name=al-target]', row);
@@ -1421,16 +1441,33 @@ function updatePlanResults() {
       : `<span class="num ${tone(r.upside)}">${fmtPct(r.upside)}</span> <span class="muted num">from ${fmtMoney(now, ccy)}</span>${al.target != null && ath
         ? ` · <button type="button" class="link-btn muted" data-act="target-ath" data-i="${i}">Use ATH</button>` : al.target == null ? ' <span class="muted">· ATH</span>' : ''}`;
   });
+  const share = (p) => fmtPct(+p || 0, { signed: false, digits: +p % 1 ? 1 : 0 });
   const tiles = s.allocations.map((a) => {
     const asset = assetById(a.assetId);
-    return { label: asset?.name || 'No instrument yet', short: asset?.symbol || '?', value: +a.pct || 0, color: a.assetId ? assetColor(a.assetId) : 'var(--muted)',
-      sub: `${fmtPct(+a.pct || 0, { signed: false, digits: +a.pct % 1 ? 1 : 0 })} · ${money(a.amount)}`, subShort: fmtPct(+a.pct || 0, { signed: false, digits: +a.pct % 1 ? 1 : 0 }) };
+    const ccy = asset?.currency || 'USD', now = nativePrice(a.assetId);
+    return {
+      label: asset?.name || 'No instrument yet', short: asset?.symbol || '?', value: +a.pct || 0, color: a.assetId ? assetColor(a.assetId) : 'var(--muted)',
+      sub: `${share(a.pct)} · ${money(a.amount)}`, subShort: share(a.pct),
+      details: [
+        ['Price', now != null ? esc(fmtMoney(now, ccy)) : '-'],
+        ['Per buy', esc(money(a.amount))],
+        ['Over plan', esc(money(a.total))],
+        [a.method === 'cagr' ? 'CAGR' : 'Target', a.method === 'cagr' ? (a.cagr != null ? `${esc(fmtPct(a.cagr, { digits: 1 }))}/yr` : '-') : a.target != null ? esc(fmtMoney(a.target, ccy)) : '-'],
+        ['Upside', `<span class="${tone(a.upside)}">${esc(fmtPct(a.upside, { digits: 1 }))}</span>`],
+        ['Projected', a.atTarget != null ? esc(money(a.atTarget)) : '-'],
+      ],
+    };
   });
-  if (off && s.allocated < 100) tiles.push({ label: 'Unallocated', short: 'Free', value: 100 - s.allocated, color: 'var(--muted)', sub: fmtPct(100 - s.allocated, { signed: false, digits: 1 }) });
+  if (off && s.allocated < 100) tiles.push({ label: 'Unallocated', short: 'Free', value: 100 - s.allocated, color: 'var(--muted)', sub: share(100 - s.allocated), details: [['Per buy', esc(money((s.perBuy * (100 - s.allocated)) / 100))]] });
   const tree = $('#plan-tree');
-  if (tree) tree.innerHTML = s.allocated > 0
-    ? `${treemap(tiles, { label: 'Plan allocation' })}<p class="small muted tm-caption num">Each buy ${money(s.perBuy)}</p>`
-    : '<p class="muted small">Set a share for at least one asset.</p>';
+  if (tree) {
+    // Laid out at the box's real width so tiles line up exactly; redrawn when the width changes
+    const W = Math.round(tree.clientWidth);
+    tree.dataset.w = W;
+    tree.innerHTML = s.allocated > 0
+      ? `${treemap(tiles, { width: W || 520, height: W && W < 480 ? 180 : 220, label: 'Plan allocation' })}<p class="small muted tm-caption num">Each buy ${money(s.perBuy)} · hover a tile for details</p>`
+      : '<p class="muted small">Set a share for at least one asset.</p>';
+  }
 
   if (!s.n) {
     res.innerHTML = `<h2>Result</h2><p class="muted">Set a duration and start date.</p>`;
