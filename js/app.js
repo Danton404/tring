@@ -1266,30 +1266,39 @@ function renderPlan(el) {
       <button class="icon-btn" type="button" data-act="del-plan" aria-label="Delete this plan">${icon('trash')}</button></div>
     </div>
     <form id="plan-form" class="plan-layout" novalidate>
-      <section class="card form">
+      <section class="card form setup">
         <h2>Setup</h2>
         <div class="field"><label for="p-name">Plan name</label><input id="p-name" name="name" value="${esc(plan.name)}" autocomplete="off"></div>
-        <div class="field"><span class="label" id="mode-label">Mode</span>
-          <div class="seg" role="radiogroup" aria-labelledby="mode-label">
+
+        <div class="setup-group" role="group" aria-labelledby="sg-budget"><span class="eyebrow" id="sg-budget">Budget</span>
+          <div class="seg full" role="radiogroup" aria-label="How you set the amount">
             <label><input type="radio" name="mode" value="total"${plan.mode === 'total' ? ' checked' : ''}><span>Spread a total</span></label>
             <label><input type="radio" name="mode" value="fixed"${plan.mode === 'fixed' ? ' checked' : ''}><span>Fixed per buy</span></label>
-          </div></div>
-        ${plan.mode === 'total'
-          ? `<div class="field"><label for="p-capital">Total (${base()})</label><input id="p-capital" name="capital" type="number" inputmode="decimal" min="0" step="any" value="${plan.capital}"></div>`
-          : `<div class="field"><label for="p-amount">Per buy (${base()})</label><input id="p-amount" name="amount" type="number" inputmode="decimal" min="0" step="any" value="${plan.amount}"></div>`}
-        <div class="row-2">
-          <div class="field"><label for="p-dur">Invest over</label><input id="p-dur" name="durationValue" type="number" inputmode="numeric" min="1" step="1" value="${plan.durationValue}"></div>
-          <div class="field"><label for="p-unit">Unit</label><select id="p-unit" name="durationUnit"><option value="weeks"${plan.durationUnit === 'weeks' ? ' selected' : ''}>Weeks</option><option value="months"${plan.durationUnit === 'months' ? ' selected' : ''}>Months</option></select></div>
+          </div>
+          ${plan.mode === 'total'
+            ? `<div class="field"><label for="p-capital">Total to invest</label><div class="affix"><input id="p-capital" name="capital" type="number" inputmode="decimal" min="0" step="any" value="${plan.capital}"><span>${base()}</span></div></div>`
+            : `<div class="field"><label for="p-amount">Amount per buy</label><div class="affix"><input id="p-amount" name="amount" type="number" inputmode="decimal" min="0" step="any" value="${plan.amount}"><span>${base()}</span></div></div>`}
         </div>
-        <div class="row-2">
-          <div class="field"><label for="p-freq">Buy frequency</label><select id="p-freq" name="frequency">${Object.entries(FREQS).map(([k, v]) => `<option value="${k}"${k === plan.frequency ? ' selected' : ''}>${v}</option>`).join('')}</select></div>
-          <div class="field"><label for="p-start">First buy</label><input id="p-start" name="startDate" type="date" value="${plan.startDate}"></div>
+
+        <div class="setup-group" role="group" aria-labelledby="sg-schedule"><span class="eyebrow" id="sg-schedule">Schedule</span>
+          <div class="row-2">
+            <div class="field"><label for="p-dur">Invest over</label><input id="p-dur" name="durationValue" type="number" inputmode="numeric" min="1" step="1" value="${plan.durationValue}"></div>
+            <div class="field"><label for="p-unit"><span class="sr-only">Duration </span>Unit</label><select id="p-unit" name="durationUnit"><option value="weeks"${plan.durationUnit === 'weeks' ? ' selected' : ''}>Weeks</option><option value="months"${plan.durationUnit === 'months' ? ' selected' : ''}>Months</option></select></div>
+          </div>
+          <div class="row-2">
+            <div class="field"><label for="p-freq">Buy frequency</label><select id="p-freq" name="frequency">${Object.entries(FREQS).map(([k, v]) => `<option value="${k}"${k === plan.frequency ? ' selected' : ''}>${v}</option>`).join('')}</select></div>
+            <div class="field"><label for="p-start">First buy</label><input id="p-start" name="startDate" type="date" value="${plan.startDate}"></div>
+          </div>
+          <p class="setup-sum num" id="setup-sum"></p>
         </div>
-        <div class="row-2">
-          <div class="field"><label for="p-hist">CAGR from history</label><select id="p-hist" name="historyYears">${HIST_YEARS.map(([v, l]) => `<option value="${v}"${v === histYears(plan) ? ' selected' : ''}>${l === 'All history' ? l : `Last ${l}`}</option>`).join('')}</select></div>
-          <div class="field"><label for="p-horizon">Projection horizon (years)</label><input id="p-horizon" name="horizonYears" type="number" inputmode="decimal" min="1" max="50" step="any" value="${plan.horizonYears ?? 5}"></div>
+
+        <div class="setup-group" role="group" aria-labelledby="sg-projection"><span class="eyebrow" id="sg-projection">Projection</span>
+          <div class="row-2">
+            <div class="field"><label for="p-hist">CAGR from</label><select id="p-hist" name="historyYears">${HIST_YEARS.map(([v, l]) => `<option value="${v}"${v === histYears(plan) ? ' selected' : ''}>${l === 'All history' ? l : `Last ${l}`}</option>`).join('')}</select></div>
+            <div class="field"><label for="p-horizon">Horizon</label><div class="affix"><input id="p-horizon" name="horizonYears" type="number" inputmode="decimal" min="1" max="50" step="any" value="${plan.horizonYears ?? 5}"><span>years</span></div></div>
+          </div>
+          <p class="hint" id="p-horizon-hint"></p>
         </div>
-        <p class="hint" id="p-horizon-hint"></p>
       </section>
       <section class="card">
         <div class="alloc-head"><h2>Allocation</h2>
@@ -1415,6 +1424,10 @@ function updatePlanResults() {
   }
   // Inputs follow their defaults (ATH, historical CAGR) until you type your own.
   // Each row: money in -> projected value (green or red), and a muted note with the per-buy amount and the source.
+  const sumEl2 = $('#setup-sum');
+  if (sumEl2) sumEl2.innerHTML = s.n
+    ? `<strong>${s.n} buys</strong> of <strong>${money(s.perBuy)}</strong><span class="muted"> · ${fmtDate(s.dates[0], { month: 'short', day: 'numeric' })} to ${fmtDate(s.end)}</span>`
+    : '<span class="muted">Set a duration and first buy date.</span>';
   const hz = $('#p-horizon-hint');
   const hy = histYears(plan);
   if (hz) hz.textContent = s.horizon ? `By ${fmtDate(s.horizon)} prices reach your targets, or have grown at their CAGR. CAGR defaults to each asset's ${hy ? `last ${hy} year${hy === 1 ? '' : 's'}` : 'full history'}.` : '';
@@ -2014,7 +2027,13 @@ async function boot() {
     else if (reason === 'settings' && ui.tab === 'markets') render();
   });
   window.addEventListener('hashchange', route);
-  const onScroll = () => document.body.classList.toggle('scrolled', scrollY > 12);
+  let scrollEnd;
+  const onScroll = () => {
+    document.body.classList.toggle('scrolled', scrollY > 12);
+    document.documentElement.classList.add('scrolling');
+    clearTimeout(scrollEnd);
+    scrollEnd = setTimeout(() => document.documentElement.classList.remove('scrolling'), 150);
+  };
   window.addEventListener('scroll', onScroll, { passive: true });
   onScroll();
   route();

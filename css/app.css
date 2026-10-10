@@ -428,6 +428,18 @@ tbody tr:last-child td { border-bottom: 0; }
 .manual summary { display: flex; align-items: center; min-height: 44px; font-size: 14px; font-weight: 500; color: var(--muted); cursor: pointer; }
 .manual[open] summary { margin-bottom: 8px; }
 
+/* Plan setup: three labelled groups; stays in view beside the allocation on tall desktop screens */
+.setup-group { display: flex; flex-direction: column; gap: 12px; min-width: 0; padding-top: 16px; border-top: 1px solid var(--border); }
+.setup .seg.full span { min-height: 40px; }
+.setup-sum { margin: 0; padding: 10px 12px; border-radius: var(--r-md); background: var(--surface-2); font-size: 14px; }
+.setup-sum strong { font-weight: 600; }
+.affix { position: relative; }
+.affix input { padding-right: 56px; }
+.affix span { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); font-size: 13px; font-weight: 600; color: var(--muted); pointer-events: none; }
+@media (min-width: 1100px) and (min-height: 820px) {
+  .plan-layout > .card.setup { position: sticky; top: calc(88px + env(safe-area-inset-top)); align-self: start; }
+}
+
 /* Plan allocation treemap */
 .plan-alloc { display: flex; flex-direction: column; gap: 14px; }
 .tm { position: relative; }
@@ -705,8 +717,17 @@ p.warn { color: var(--warning); }
 .sw-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
 
 /* Sticky top bar: page background behind it once the page scrolls */
-.topbar { position: sticky; top: 0; z-index: 15; transition: box-shadow 150ms ease-out; }
+.topbar { position: sticky; top: 0; z-index: 15; }
+/* Full-width backdrop as its own layer. (The old giant box-shadow + clip-path could lose its clip for a
+   frame while scrolling, painting the page colour over everything: the blank-screen flash.) */
+.topbar::before {
+  content: ''; position: absolute; z-index: -1; top: 0; bottom: 0; left: 50%; width: 100vw; transform: translateX(-50%);
+  background: var(--bg); border-bottom: 1px solid var(--border); opacity: 0; transition: opacity 150ms ease-out; pointer-events: none;
+}
+body { overflow-x: clip; }
 /* Same size in both states: changing its padding here moved the page and toggled the state back, which flickered */
-body.scrolled .topbar { background: var(--bg); box-shadow: 0 1px 0 var(--border), 0 0 0 100vmax var(--bg); clip-path: inset(0 -100vmax -1px); }
+body.scrolled .topbar::before { opacity: 1; }
+/* While the page scrolls, cards sliding under a still mouse don't trigger hover (tile pop-outs, edge glow) */
+html.scrolling #view { pointer-events: none; }
 .cardnav { position: sticky; top: calc(72px + env(safe-area-inset-top)); z-index: 14; }
 @media (min-width: 900px) { .cardnav { top: calc(76px + env(safe-area-inset-top)); } }
