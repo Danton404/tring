@@ -85,15 +85,17 @@ function initBorderGlow() {
   sync();
   store.subscribe((r) => { if (r === 'settings') sync(); });
   reduce.addEventListener?.('change', sync);
-  addEventListener('pointermove', (e) => {
-    if (e.pointerType !== 'mouse' || !fxEnabled()) return;
-    const el = e.target.closest?.(SURFACES);
+  // Light the card under the pointer. Scrolling moves cards under a still mouse, so it re-aims too;
+  // otherwise a card arriving under the cursor flashes with the angle it had last time.
+  let px = -1, py = -1, queued = false;
+  const aim = (target, x, y) => {
+    const el = target?.closest?.(SURFACES);
     if (!el) return;
     // Cards re-render often, so the glow layer is added on demand (last child: absolute, outside the layout)
     if (!el.querySelector(':scope > .edge-light')) el.insertAdjacentHTML('beforeend', '<span class="edge-light" aria-hidden="true"></span>');
     const r = el.getBoundingClientRect();
     const cx = r.width / 2, cy = r.height / 2;
-    const dx = e.clientX - r.left - cx, dy = e.clientY - r.top - cy;
+    const dx = x - r.left - cx, dy = y - r.top - cy;
     // 0 at the centre, 1 on the edge, relative to the card's own shape
     const kx = dx ? cx / Math.abs(dx) : Infinity, ky = dy ? cy / Math.abs(dy) : Infinity;
     const edge = Math.min(Math.max(1 / Math.min(kx, ky), 0), 1);
@@ -101,7 +103,17 @@ function initBorderGlow() {
     if (deg < 0) deg += 360;
     el.style.setProperty('--edge-proximity', (edge * 100).toFixed(2));
     el.style.setProperty('--cursor-angle', `${deg.toFixed(2)}deg`);
+  };
+  addEventListener('pointermove', (e) => {
+    if (e.pointerType !== 'mouse' || !fxEnabled()) return;
+    px = e.clientX; py = e.clientY;
+    aim(e.target, px, py);
   }, { passive: true });
+  addEventListener('scroll', () => {
+    if (queued || px < 0 || !fxEnabled()) return;
+    queued = true;
+    requestAnimationFrame(() => { queued = false; aim(document.elementFromPoint(px, py), px, py); });
+  }, { capture: true, passive: true });
 }
 
 export function initFx() {

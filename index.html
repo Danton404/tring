@@ -16,7 +16,27 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/app.css">
+  <link rel="stylesheet" href="css/app.css?v=20261010214945">
+  <!-- Every module carries the same version, so a deploy never mixes old and new files from the browser cache.
+       deploy.command rewrites the ?v= stamps on each publish. -->
+  <script type="importmap">
+  { "imports": {
+    "./js/app.js": "./js/app.js?v=20261010214945",
+    "./js/ai.js": "./js/ai.js?v=20261010214945",
+    "./js/analytics.js": "./js/analytics.js?v=20261010214945",
+    "./js/calc.js": "./js/calc.js?v=20261010214945",
+    "./js/calendar.js": "./js/calendar.js?v=20261010214945",
+    "./js/cloud.js": "./js/cloud.js?v=20261010214945",
+    "./js/config.js": "./js/config.js?v=20261010214945",
+    "./js/fx.js": "./js/fx.js?v=20261010214945",
+    "./js/history.js": "./js/history.js?v=20261010214945",
+    "./js/importer.js": "./js/importer.js?v=20261010214945",
+    "./js/market.js": "./js/market.js?v=20261010214945",
+    "./js/store.js": "./js/store.js?v=20261010214945",
+    "./js/ui.js": "./js/ui.js?v=20261010214945"
+  } }
+  </script>
+
 </head>
 <body>
   <div class="app">
@@ -37,6 +57,6 @@
   <div id="gate" class="gate" hidden></div>
   <div id="toasts" class="toasts"></div>
   <dialog id="sheet" class="sheet" aria-label="Panel"></dialog>
-  <script type="module" src="js/app.js"></script>
+  <script type="module" src="js/app.js?v=20261010214945"></script>
 </body>
 </html>

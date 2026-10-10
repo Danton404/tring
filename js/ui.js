@@ -135,6 +135,49 @@ export function donut(segments, { size = 168, thickness = 22, label = 'Allocatio
   </svg>`;
 }
 
+// Treemap (squarified): tiles sized by value, laid out to stay close to square.
+// items: [{ label, short, value, color, sub, subShort }] (short versions go in small tiles); sizes are % of the box, so it scales with its container.
+export function treemap(items, { width = 520, height = 220, label = 'Allocation' } = {}) {
+  const list = items.filter((i) => i.value > 0).sort((a, b) => b.value - a.value);
+  const total = list.reduce((s, i) => s + i.value, 0);
+  if (!total) return '';
+  const nodes = list.map((i) => ({ ...i, area: (i.value / total) * width * height }));
+  const out = [];
+  const worst = (row, side) => {
+    const s = row.reduce((t, n) => t + n.area, 0);
+    const max = Math.max(...row.map((n) => n.area)), min = Math.min(...row.map((n) => n.area));
+    return Math.max((side * side * max) / (s * s), (s * s) / (side * side * min));
+  };
+  const place = (row, r) => {
+    const s = row.reduce((t, n) => t + n.area, 0);
+    if (r.w >= r.h) {
+      // Column on the left
+      const w = s / r.h;
+      let y = r.y;
+      for (const n of row) { const h = n.area / w; out.push({ n, x: r.x, y, w, h }); y += h; }
+      return { x: r.x + w, y: r.y, w: r.w - w, h: r.h };
+    }
+    const h = s / r.w;
+    let x = r.x;
+    for (const n of row) { const w = n.area / h; out.push({ n, x, y: r.y, w, h }); x += w; }
+    return { x: r.x, y: r.y + h, w: r.w, h: r.h - h };
+  };
+  let rect = { x: 0, y: 0, w: width, h: height }, row = [];
+  for (let k = 0; k < nodes.length;) {
+    const side = Math.min(rect.w, rect.h);
+    if (!row.length || worst([...row, nodes[k]], side) <= worst(row, side)) row.push(nodes[k++]);
+    else { rect = place(row, rect); row = []; }
+  }
+  if (row.length) place(row, rect);
+  const pct = (v, of) => `${((v / of) * 100).toFixed(3)}%`;
+  return `<div class="tm" role="img" aria-label="${esc(label)}">${out.map(({ n, x, y, w, h }) => {
+    // Text only where it fits: name and share in big tiles, share alone in small ones
+    const big = w > 150 && h > 70, mid = w > 70 && h > 38;
+    return `<div class="tm-cell" style="left:${pct(x, width)};top:${pct(y, height)};width:${pct(w, width)};height:${pct(h, height)};--c:${n.color}" title="${esc(`${n.label}: ${n.sub || ''}`)}">
+      <div class="tm-in">${big ? `<span class="tm-name">${esc(n.label)}</span>` : mid ? `<span class="tm-name">${esc(n.short || n.label)}</span>` : ''}${mid ? `<span class="tm-val">${esc((big ? n.sub : n.subShort || n.sub) || '')}</span>` : ''}</div></div>`;
+  }).join('')}</div>`;
+}
+
 // Line chart: tone-coloured line over a faint grid, soft gradient fill, end dot.
 // Returns { html, values } for bindScrub; the first series is the one the cursor follows.
 let chartSeq = 0;

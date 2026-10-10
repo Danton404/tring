@@ -20,6 +20,11 @@ git fetch -q origin main 2>/dev/null
 before=$(git rev-parse -q --verify origin/main)
 
 if [[ -n $(git status --porcelain) ]]; then
+  # New version stamp on the app files, so browsers load all modules from the same deploy
+  if [[ -n $(git status --porcelain -- js css) ]]; then
+    stamp=$(date '+%Y%m%d%H%M%S')
+    sed -i '' -E "s/\?v=[0-9A-Za-z]+/?v=$stamp/g" index.html
+  fi
   git status --short
   echo
   read "msg?Commit message (Enter for default): "

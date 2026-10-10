@@ -140,6 +140,7 @@ export function planSummary(plan, priceOf, { markets = [], targetOf = () => null
     dates, n, perBuy, total: perBuy * n, allocated, allocations, end: dates[n - 1] || null, horizon: horizon ? toISO(horizon) : null,
     atTarget, gain: atTarget != null ? atTarget - pricedCost : null, gainPct: atTarget != null && pricedCost ? (atTarget / pricedCost - 1) * 100 : null,
     missingTargets: funded.length - priced.length,
+    covered: pricedCost,
   };
 }
 

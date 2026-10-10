@@ -10,7 +10,7 @@ import { initFx } from './fx.js';
 import { marketOf, MARKET_NAMES } from './calendar.js';
 import {
   $, $$, esc, icon, fmtMoney, fmtSignedMoney, fmtPct, fmtNum, fmtDate, todayISO, tone,
-  toast, openSheet, donut, lineChart, bindScrub, bigMoney, countUp, colorAt, md,
+  toast, openSheet, donut, treemap, lineChart, bindScrub, bigMoney, countUp, colorAt, md,
 } from './ui.js';
 
 const TABS = [
@@ -1284,8 +1284,8 @@ function renderPlan(el) {
           <div class="seg" role="radiogroup" aria-label="Predict every asset by">
             ${[['target', 'Price target'], ['cagr', 'CAGR']].map(([v, l]) => `<label><input type="radio" name="all-method" value="${v}"${planMethod(plan) === v ? ' checked' : ''}><span>${l}</span></label>`).join('')}
           </div></div>
-        <div class="alloc">
-          <div id="plan-donut"></div>
+        <div class="plan-alloc">
+          <div id="plan-tree"></div>
           <div class="alloc-rows">
             ${plan.allocations.map((al, i) => {
               const a = assetById(al.assetId);
@@ -1421,10 +1421,16 @@ function updatePlanResults() {
       : `<span class="num ${tone(r.upside)}">${fmtPct(r.upside)}</span> <span class="muted num">from ${fmtMoney(now, ccy)}</span>${al.target != null && ath
         ? ` · <button type="button" class="link-btn muted" data-act="target-ath" data-i="${i}">Use ATH</button>` : al.target == null ? ' <span class="muted">· ATH</span>' : ''}`;
   });
-  const segs = plan.allocations.map((al) => ({ label: assetName(al.assetId), value: +al.pct || 0, color: al.assetId ? assetColor(al.assetId) : 'var(--border)' }));
-  if (off && s.allocated < 100) segs.push({ label: 'Unallocated', value: 100 - s.allocated, color: 'var(--border)' });
-  const d = $('#plan-donut');
-  if (d) d.innerHTML = donut(segs, { label: 'Plan allocation', center: s.perBuy ? money(s.perBuy) : '' });
+  const tiles = s.allocations.map((a) => {
+    const asset = assetById(a.assetId);
+    return { label: asset?.name || 'No instrument yet', short: asset?.symbol || '?', value: +a.pct || 0, color: a.assetId ? assetColor(a.assetId) : 'var(--muted)',
+      sub: `${fmtPct(+a.pct || 0, { signed: false, digits: +a.pct % 1 ? 1 : 0 })} · ${money(a.amount)}`, subShort: fmtPct(+a.pct || 0, { signed: false, digits: +a.pct % 1 ? 1 : 0 }) };
+  });
+  if (off && s.allocated < 100) tiles.push({ label: 'Unallocated', short: 'Free', value: 100 - s.allocated, color: 'var(--muted)', sub: fmtPct(100 - s.allocated, { signed: false, digits: 1 }) });
+  const tree = $('#plan-tree');
+  if (tree) tree.innerHTML = s.allocated > 0
+    ? `${treemap(tiles, { label: 'Plan allocation' })}<p class="small muted tm-caption num">Each buy ${money(s.perBuy)}</p>`
+    : '<p class="muted small">Set a share for at least one asset.</p>';
 
   if (!s.n) {
     res.innerHTML = `<h2>Result</h2><p class="muted">Set a duration and start date.</p>`;
@@ -1437,7 +1443,7 @@ function updatePlanResults() {
       <div class="plan-gain">
         <span class="eyebrow">${{ target: 'Potential gain at your targets', cagr: `Projected gain by ${by}`, mixed: `Projected gain (targets and CAGR to ${by})` }[planMethod(plan)]}</span>
         <strong class="hero num ${tone(s.gain)}">${s.gain != null ? smoney(s.gain) : '-'}</strong>
-        <span class="small num">${s.gain != null ? `<span class="${tone(s.gain)}">${fmtPct(s.gainPct)}</span> <span class="muted">· worth ${money(s.atTarget)} on ${money(s.total)} invested</span>` : '<span class="muted">Add a target or CAGR to see it</span>'}</span>
+        <span class="small num">${s.gain != null ? `<span class="${tone(s.gain)}">${fmtPct(s.gainPct)}</span> <span class="muted">· worth ${money(s.atTarget)} on ${money(s.covered)} invested${s.missingTargets ? ` · ${s.missingTargets} asset${s.missingTargets === 1 ? '' : 's'} without a prediction left out` : ''}</span>` : '<span class="muted">Add a target or CAGR to see it</span>'}</span>
       </div>
       <div class="kpis">
         <div class="kpi"><span class="label">Buys</span><strong class="num">${s.n}</strong><span class="small muted">${FREQS[plan.frequency].toLowerCase()}</span></div>

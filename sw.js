@@ -1,6 +1,6 @@
 // Network-first for the app shell so updates show up immediately; cache is the offline fallback.
 // API requests (other origins) are never cached here.
-const VERSION = 'tring-v14';
+const VERSION = 'tring-v15';
 const SHELL = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest', 'icon.svg',
   'js/app.js', 'js/config.js', 'js/cloud.js', 'js/importer.js', 'js/history.js', 'js/store.js', 'js/market.js', 'js/calc.js', 'js/ai.js', 'js/ui.js', 'js/fx.js', 'js/analytics.js', 'js/calendar.js',
@@ -29,6 +29,6 @@ self.addEventListener('fetch', (e) => {
         caches.open(VERSION).then((c) => c.put(e.request, copy));
         return res;
       })
-      .catch(() => caches.match(e.request).then((r) => r || caches.match('index.html'))),
+      .catch(() => caches.match(e.request, { ignoreSearch: true }).then((r) => r || caches.match('index.html'))),
   );
 });
