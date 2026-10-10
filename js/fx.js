@@ -1,5 +1,5 @@
-// Spotlight Card (after React Bits): a faint light on panel edges. With a mouse it follows the
-// pointer; on phones it follows device tilt and only shows while the phone is moving.
+// Light effects. With a mouse: Border Glow (after React Bits), the card edge nearest the pointer lights up.
+// On phones: a faint rim light that follows device tilt and only shows while the phone is moving.
 import { store } from './store.js';
 
 const reduce = matchMedia('(prefers-reduced-motion: reduce)');
@@ -53,18 +53,6 @@ function paint() {
   }
 }
 
-function initMouse() {
-  addEventListener('pointermove', (e) => {
-    if (e.pointerType !== 'mouse') return;
-    light.tilt = false;
-    light.tx = e.clientX; light.ty = e.clientY;
-    light.ton = fxEnabled() ? 1 : 0;
-    wake();
-  }, { passive: true });
-  document.addEventListener('pointerout', (e) => { if (!e.relatedTarget) { light.ton = 0; wake(); } });
-  addEventListener('scroll', () => { if (light.on) wake(); }, { capture: true, passive: true });
-}
-
 function initTilt() {
   let base = null, prev = null;
   const onTilt = (e) => {
@@ -90,7 +78,33 @@ function initTilt() {
   }
 }
 
+// ---------- Border Glow (mouse): the edge nearest the pointer lights up (CSS in app.css)
+
+function initBorderGlow() {
+  const sync = () => document.documentElement.classList.toggle('bglow', fxEnabled());
+  sync();
+  store.subscribe((r) => { if (r === 'settings') sync(); });
+  reduce.addEventListener?.('change', sync);
+  addEventListener('pointermove', (e) => {
+    if (e.pointerType !== 'mouse' || !fxEnabled()) return;
+    const el = e.target.closest?.(SURFACES);
+    if (!el) return;
+    // Cards re-render often, so the glow layer is added on demand (last child: absolute, outside the layout)
+    if (!el.querySelector(':scope > .edge-light')) el.insertAdjacentHTML('beforeend', '<span class="edge-light" aria-hidden="true"></span>');
+    const r = el.getBoundingClientRect();
+    const cx = r.width / 2, cy = r.height / 2;
+    const dx = e.clientX - r.left - cx, dy = e.clientY - r.top - cy;
+    // 0 at the centre, 1 on the edge, relative to the card's own shape
+    const kx = dx ? cx / Math.abs(dx) : Infinity, ky = dy ? cy / Math.abs(dy) : Infinity;
+    const edge = Math.min(Math.max(1 / Math.min(kx, ky), 0), 1);
+    let deg = (Math.atan2(dy, dx) * 180) / Math.PI + 90;
+    if (deg < 0) deg += 360;
+    el.style.setProperty('--edge-proximity', (edge * 100).toFixed(2));
+    el.style.setProperty('--cursor-angle', `${deg.toFixed(2)}deg`);
+  }, { passive: true });
+}
+
 export function initFx() {
-  if (mouse.matches) initMouse(); else initTilt();
+  if (mouse.matches) initBorderGlow(); else initTilt();
   store.subscribe((r) => { if (r === 'settings' && !fxEnabled()) { light.ton = 0; light.energy = 0; wake(); } });
 }

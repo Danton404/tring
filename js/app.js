@@ -1750,7 +1750,7 @@ function renderSettings(el) {
   const dataCard = `
     <section class="card form">
       <h2>Display</h2>
-      <label class="check"><input type="checkbox" id="s-motion"${st.motionFx !== false ? ' checked' : ''}><span>Light effects (follow the mouse, or tilt on phones)</span></label>
+      <label class="check"><input type="checkbox" id="s-motion"${st.motionFx !== false ? ' checked' : ''}><span>Light effects (glowing edges near the mouse, or tilt on phones)</span></label>
     </section>
     <section class="card form">
       <h2>Data</h2>

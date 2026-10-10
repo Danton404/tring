@@ -542,6 +542,86 @@ p.warn { color: var(--warning); }
   background: radial-gradient(180px circle at var(--fx-x, 50%) var(--fx-y, 50%), color-mix(in oklch, var(--fx-light) calc(var(--fx-edge) * 100%), transparent), transparent 70%);
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude;
 }
+/* Border Glow (after React Bits): with a mouse, a colored border and outer glow light up on the edge
+   nearest the pointer. js/fx.js sets html.bglow, --edge-proximity (0-100) and --cursor-angle per card,
+   and adds the .edge-light layer. Phones keep the tilt rim above. */
+:root {
+  --bg-glow: 214deg 95% 74%;
+  --bg-c1: #5aa2ff; --bg-c2: #38bdf8; --bg-c3: #8ea2ff;
+  --bg-blend: plus-lighter; --bg-fill-blend: soft-light; --bg-fill: 0.35;
+}
+@media (prefers-color-scheme: light) {
+  :root { --bg-glow: 214deg 85% 52%; --bg-blend: normal; --bg-fill-blend: normal; --bg-fill: 0.12; }
+}
+.bglow :is(.card, .panel):not(.no-fx) {
+  --edge-proximity: 0; --cursor-angle: 45deg;
+  --edge-sensitivity: 30; --color-sensitivity: 50; --cone-spread: 25; --glow-padding: 40px; --fill-opacity: var(--bg-fill);
+  --card-bg: var(--surface);
+  --g1: radial-gradient(at 80% 55%, var(--bg-c1) 0px, transparent 50%);
+  --g2: radial-gradient(at 69% 34%, var(--bg-c2) 0px, transparent 50%);
+  --g3: radial-gradient(at 8% 6%, var(--bg-c3) 0px, transparent 50%);
+  --g4: radial-gradient(at 41% 38%, var(--bg-c1) 0px, transparent 50%);
+  --g5: radial-gradient(at 86% 85%, var(--bg-c2) 0px, transparent 50%);
+  --g6: radial-gradient(at 82% 18%, var(--bg-c3) 0px, transparent 50%);
+  --g7: radial-gradient(at 51% 4%, var(--bg-c2) 0px, transparent 50%);
+  --gbase: linear-gradient(var(--bg-c1) 0 100%);
+}
+.bglow :is(.card, .panel):not(.no-fx)::before,
+.bglow :is(.card, .panel):not(.no-fx)::after,
+.bglow :is(.card, .panel):not(.no-fx) > .edge-light {
+  content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: -1;
+  padding: 0; -webkit-mask: none; mask: none;
+  transition: opacity 250ms ease-out;
+}
+.bglow :is(.card, .panel):not(.no-fx):not(:hover)::before,
+.bglow :is(.card, .panel):not(.no-fx):not(:hover)::after,
+.bglow :is(.card, .panel):not(.no-fx):not(:hover) > .edge-light { opacity: 0; transition: opacity 750ms ease-in-out; }
+/* Mesh-gradient border, shown in a cone toward the pointer */
+.bglow :is(.card, .panel):not(.no-fx)::before {
+  border: 1px solid transparent;
+  background: linear-gradient(var(--card-bg) 0 100%) padding-box,
+    var(--g1) border-box, var(--g2) border-box, var(--g3) border-box, var(--g4) border-box,
+    var(--g5) border-box, var(--g6) border-box, var(--g7) border-box, var(--gbase) border-box;
+  opacity: calc((var(--edge-proximity) - var(--color-sensitivity)) / (100 - var(--color-sensitivity)));
+  -webkit-mask-image: conic-gradient(from var(--cursor-angle) at center, black calc(var(--cone-spread) * 1%), transparent calc((var(--cone-spread) + 15) * 1%), transparent calc((100 - var(--cone-spread) - 15) * 1%), black calc((100 - var(--cone-spread)) * 1%));
+  mask-image: conic-gradient(from var(--cursor-angle) at center, black calc(var(--cone-spread) * 1%), transparent calc((var(--cone-spread) + 15) * 1%), transparent calc((100 - var(--cone-spread) - 15) * 1%), black calc((100 - var(--cone-spread)) * 1%));
+}
+/* Faint tint just inside the lit edge (the middle of the card stays clear) */
+.bglow :is(.card, .panel):not(.no-fx)::after {
+  border: 1px solid transparent;
+  background: var(--g1) padding-box, var(--g2) padding-box, var(--g3) padding-box, var(--g4) padding-box,
+    var(--g5) padding-box, var(--g6) padding-box, var(--g7) padding-box, var(--gbase) padding-box;
+  mask-image: linear-gradient(to bottom, black, black),
+    radial-gradient(ellipse at 50% 50%, black 40%, transparent 65%),
+    radial-gradient(ellipse at 66% 66%, black 5%, transparent 40%),
+    radial-gradient(ellipse at 33% 33%, black 5%, transparent 40%),
+    radial-gradient(ellipse at 66% 33%, black 5%, transparent 40%),
+    radial-gradient(ellipse at 33% 66%, black 5%, transparent 40%),
+    conic-gradient(from var(--cursor-angle) at center, transparent 5%, black 15%, black 85%, transparent 95%);
+  mask-composite: subtract, add, add, add, add, add;
+  opacity: calc(var(--fill-opacity) * (var(--edge-proximity) - var(--color-sensitivity)) / (100 - var(--color-sensitivity)));
+  mix-blend-mode: var(--bg-fill-blend);
+}
+/* Outer glow */
+.bglow :is(.card, .panel):not(.no-fx) > .edge-light {
+  inset: calc(var(--glow-padding) * -1); z-index: 1;
+  -webkit-mask-image: conic-gradient(from var(--cursor-angle) at center, black 2.5%, transparent 10%, transparent 90%, black 97.5%);
+  mask-image: conic-gradient(from var(--cursor-angle) at center, black 2.5%, transparent 10%, transparent 90%, black 97.5%);
+  opacity: calc((var(--edge-proximity) - var(--edge-sensitivity)) / (100 - var(--edge-sensitivity)));
+  mix-blend-mode: var(--bg-blend);
+}
+.bglow :is(.card, .panel):not(.no-fx) > .edge-light::before {
+  content: ''; position: absolute; inset: var(--glow-padding); border-radius: inherit;
+  box-shadow:
+    inset 0 0 0 1px hsl(var(--bg-glow) / 100%), inset 0 0 1px 0 hsl(var(--bg-glow) / 60%), inset 0 0 3px 0 hsl(var(--bg-glow) / 50%),
+    inset 0 0 6px 0 hsl(var(--bg-glow) / 40%), inset 0 0 15px 0 hsl(var(--bg-glow) / 30%), inset 0 0 25px 2px hsl(var(--bg-glow) / 20%),
+    inset 0 0 50px 2px hsl(var(--bg-glow) / 10%),
+    0 0 1px 0 hsl(var(--bg-glow) / 60%), 0 0 3px 0 hsl(var(--bg-glow) / 50%), 0 0 6px 0 hsl(var(--bg-glow) / 40%),
+    0 0 15px 0 hsl(var(--bg-glow) / 30%), 0 0 25px 2px hsl(var(--bg-glow) / 20%), 0 0 50px 2px hsl(var(--bg-glow) / 10%);
+}
+.edge-light { display: none; }
+.bglow .edge-light { display: block; }
+
 /* ---------- Card Nav (quick actions) */
 .menu-btn { position: relative; width: 44px; height: 44px; flex: none; border: 0; border-radius: 999px; background: transparent; cursor: pointer; }
 .menu-btn span { position: absolute; left: 13px; right: 13px; height: 2px; border-radius: 2px; background: var(--text); transition: transform 220ms ease-out, top 220ms ease-out; }
