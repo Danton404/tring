@@ -104,27 +104,40 @@ export function buyDates(plan, markets = []) {
   return out;
 }
 
-// targetOf(assetId) -> { price, target } in the asset's own currency. Upside assumes every buy fills at today's price.
+// targetOf(assetId, allocation) -> { method: 'target', price, target } (asset's own currency) or { method: 'cagr', cagr } (% a year).
+// Target: every buy fills at today's price and the asset then reaches the target.
+// CAGR: each buy compounds from its own date to the horizon (plan.horizonYears after the first buy).
 export function planSummary(plan, priceOf, { markets = [], targetOf = () => null } = {}) {
   const dates = buyDates(plan, markets);
   const n = dates.length;
+  const horizon = plan.startDate ? addMonths(parseISO(plan.startDate), Math.round(12 * (+plan.horizonYears || 5))) : null;
+  const years = dates.map((d) => (horizon ? Math.max(0, (horizon - parseISO(d)) / (365.25 * 864e5)) : 0));
   const perBuy = n ? (plan.mode === 'fixed' ? +plan.amount || 0 : (+plan.capital || 0) / n) : 0;
   const allocated = sum(plan.allocations, (a) => +a.pct || 0);
   const allocations = plan.allocations.map((al) => {
     const amount = (perBuy * (+al.pct || 0)) / 100;
     const price = priceOf(al.assetId);
     const total = amount * n;
-    const t = targetOf(al.assetId, al);
-    const upside = t?.price > 0 && t.target > 0 ? (t.target / t.price - 1) * 100 : null;
-    const atTarget = upside != null ? total * (1 + upside / 100) : null;
-    return { ...al, amount, total, price, units: price ? amount / price : null, target: t?.target ?? null, upside, atTarget, gain: atTarget != null ? atTarget - total : null };
+    const t = targetOf(al.assetId, al) || {};
+    const method = t.method === 'cagr' ? 'cagr' : 'target';
+    let upside = null, atTarget = null;
+    if (method === 'cagr') {
+      if (t.cagr != null && isFinite(t.cagr) && t.cagr > -100 && total > 0) {
+        atTarget = amount * sum(years, (y) => (1 + t.cagr / 100) ** y);
+        upside = (atTarget / total - 1) * 100;
+      }
+    } else if (t.price > 0 && t.target > 0) {
+      upside = (t.target / t.price - 1) * 100;
+      atTarget = total * (1 + upside / 100);
+    }
+    return { ...al, method, amount, total, price, units: price ? amount / price : null, target: method === 'target' ? t.target ?? null : null, cagr: method === 'cagr' ? t.cagr ?? null : null, upside, atTarget, gain: atTarget != null ? atTarget - total : null };
   });
   const funded = allocations.filter((a) => a.total > 0);
   const priced = funded.filter((a) => a.atTarget != null);
   const pricedCost = sum(priced, (a) => a.total);
   const atTarget = priced.length ? sum(priced, (a) => a.atTarget) : null;
   return {
-    dates, n, perBuy, total: perBuy * n, allocated, allocations, end: dates[n - 1] || null,
+    dates, n, perBuy, total: perBuy * n, allocated, allocations, end: dates[n - 1] || null, horizon: horizon ? toISO(horizon) : null,
     atTarget, gain: atTarget != null ? atTarget - pricedCost : null, gainPct: atTarget != null && pricedCost ? (atTarget / pricedCost - 1) * 100 : null,
     missingTargets: funded.length - priced.length,
   };

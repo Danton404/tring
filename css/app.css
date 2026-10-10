@@ -1,7 +1,6 @@
 /* TRING design tokens */
 :root {
   --fx-light: oklch(0.2 0.01 260);
-  --fx-fill: 0.03;
   --fx-edge: 0.25;
   --bg: oklch(0.965 0.002 260);
   --surface: oklch(0.995 0 0);
@@ -43,7 +42,6 @@
     --highlight: inset 0 1px 0 oklch(1 0 0 / 0.045);
     --shadow: 0 1px 0 oklch(0 0 0 / 0.3), 0 10px 30px oklch(0 0 0 / 0.25);
     --fx-light: oklch(1 0 0);
-    --fx-fill: 0.04;
     --fx-edge: 0.35;
     color-scheme: dark;
   }
@@ -395,6 +393,10 @@ tbody tr:last-child td { border-bottom: 0; }
 .ccy-input input { min-height: 36px; padding: 6px 46px 6px 10px; text-align: right; font-variant-numeric: tabular-nums; }
 .ccy-input span { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); font-size: 12px; font-weight: 600; color: var(--muted); pointer-events: none; }
 .alloc-up { flex: 1; min-width: 140px; }
+.alloc-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 12px; }
+.alloc-head h2 { margin: 0; }
+.seg.mini { padding: 2px; }
+.seg.mini span { min-height: 32px; padding: 0 10px; font-size: 13px; }
 .alloc-up .link-btn { font-size: 13px; min-height: 24px; }
 
 /* Instrument search (combobox) */
@@ -524,23 +526,16 @@ p.warn { color: var(--warning); }
   .pick:hover { border-color: var(--accent); }
   .hold:hover { background: var(--surface-2); }
   .combo-opt:hover { background: var(--surface-3); }
-  .asset { transition: border-color 150ms ease-out; }
-  .asset:hover { border-color: color-mix(in oklch, var(--text) 16%, var(--border)); }
-  tbody tr:hover td { background: color-mix(in oklch, var(--surface-2) 60%, transparent); }
   .cn-link:hover { opacity: 1; transform: translateX(2px); }
 }
 .hold:active, .icon-btn:active, .pick:active { background: var(--surface-2); }
 
 /* ---------- Light effects (js/fx.js). --fx-x/--fx-y: light position in the element, --fx-o: strength */
 .card:not(.no-fx), .panel:not(.no-fx) { position: relative; isolation: isolate; }
-/* Spotlight Card: soft fill plus a brighter rim */
-.card:not(.no-fx)::before, .panel:not(.no-fx)::before,
+/* Spotlight Card: a brighter rim near the pointer (no fill inside the card) */
 .card:not(.no-fx)::after, .panel:not(.no-fx)::after {
   content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: -1;
   opacity: var(--fx-o, 0);
-}
-.card:not(.no-fx)::before, .panel:not(.no-fx)::before {
-  background: radial-gradient(260px circle at var(--fx-x, 50%) var(--fx-y, 50%), color-mix(in oklch, var(--fx-light) calc(var(--fx-fill) * 100%), transparent), transparent 70%);
 }
 .card:not(.no-fx)::after, .panel:not(.no-fx)::after {
   padding: 1px; z-index: 1;

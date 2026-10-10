@@ -43,6 +43,8 @@ const assetById = (id) => store.state.assets.find((a) => a.id === id);
 const assetName = (id) => (id ? assetById(id)?.name || 'Removed asset' : 'No instrument yet');
 const assetColor = (id) => colorAt(store.state.assets.findIndex((a) => a.id === id));
 const round = (n, d = 2) => Math.round(n * 10 ** d) / 10 ** d;
+// "Bitcoin (BTC)", but "Nasdaq 100 (QQQ)" stays as is when the name already carries the ticker
+const assetLabel = (a) => (!a ? '' : !a.symbol || a.name.toUpperCase().includes(a.symbol.toUpperCase()) ? a.name : `${a.name} (${a.symbol})`);
 
 // =====================================================================
 // Shell
@@ -148,7 +150,7 @@ function emptyState(title, text, action = '') {
 }
 
 const assetOptions = (selected, list = store.state.assets.filter((a) => !a.archived || a.id === selected)) =>
-  list.map((a) => `<option value="${a.id}"${a.id === selected ? ' selected' : ''}>${esc(a.name)} (${esc(a.symbol)})</option>`).join('');
+  list.map((a) => `<option value="${a.id}"${a.id === selected ? ' selected' : ''}>${esc(assetLabel(a))}</option>`).join('');
 
 // ---------- Instrument search: your assets first, then any listing (Yahoo) or coin (CoinGecko)
 
@@ -1211,10 +1213,31 @@ const currentPlan = () => store.state.plans.find((p) => p.id === ui.planId) || s
 const nativePrice = (id) => market.quote(id)?.price ?? assetById(id)?.lastPrice ?? null;
 const athNative = (id) => (market.ath(id)?.partial ? null : market.ath(id)?.ath ?? null);
 const planMarkets = (plan) => [...new Set(plan.allocations.map((al) => marketOf(assetById(al.assetId))).filter(Boolean))];
+// Historical CAGR over the last 5 years (or the history there is): the default for CAGR predictions
+const hist = new Map(); // id -> undefined while loading, null when unavailable, { cagr, years }
+function histCagr(id) {
+  const a = assetById(id);
+  if (!a) return null;
+  if (!hist.has(id)) {
+    hist.set(id, undefined);
+    market.getLongSeries(a, '5y').then((pts) => {
+      const f = pts[0], l = pts[pts.length - 1];
+      const yrs = f && l ? (new Date(l.date) - new Date(f.date)) / (365.25 * 864e5) : 0;
+      hist.set(id, yrs >= 0.9 && f.close > 0 ? { cagr: ((l.close / f.close) ** (1 / yrs) - 1) * 100, years: yrs } : null);
+    }).catch(() => hist.set(id, null)).finally(() => { if (ui.tab === 'plan') updatePlanResults(); });
+  }
+  return hist.get(id);
+}
 const summarizePlan = (plan) => planSummary(plan, priceOf, {
   markets: planMarkets(plan),
-  targetOf: (id, al) => ({ price: nativePrice(id), target: al.target ?? athNative(id) }),
+  targetOf: (id, al) => (al.method === 'cagr'
+    ? { method: 'cagr', cagr: al.cagr ?? histCagr(id)?.cagr ?? null }
+    : { method: 'target', price: nativePrice(id), target: al.target ?? athNative(id) }),
 });
+const planMethod = (plan) => {
+  const m = new Set(plan.allocations.map((al) => (al.method === 'cagr' ? 'cagr' : 'target')));
+  return m.size === 1 ? [...m][0] : m.size ? 'mixed' : 'target';
+};
 const inputNum = (n) => (n == null || !isFinite(n) ? '' : String(Number(n.toPrecision(7))));
 
 function renderPlan(el) {
@@ -1253,9 +1276,14 @@ function renderPlan(el) {
           <div class="field"><label for="p-freq">Buy frequency</label><select id="p-freq" name="frequency">${Object.entries(FREQS).map(([k, v]) => `<option value="${k}"${k === plan.frequency ? ' selected' : ''}>${v}</option>`).join('')}</select></div>
           <div class="field"><label for="p-start">First buy</label><input id="p-start" name="startDate" type="date" value="${plan.startDate}"></div>
         </div>
+        <div class="field"><label for="p-horizon">CAGR horizon (years)</label><input id="p-horizon" name="horizonYears" type="number" inputmode="decimal" min="1" max="50" step="any" value="${plan.horizonYears ?? 5}">
+          <p class="hint" id="p-horizon-hint"></p></div>
       </section>
       <section class="card">
-        <h2>Allocation</h2>
+        <div class="alloc-head"><h2>Allocation</h2>
+          <div class="seg" role="radiogroup" aria-label="Predict every asset by">
+            ${[['target', 'Price target'], ['cagr', 'CAGR']].map(([v, l]) => `<label><input type="radio" name="all-method" value="${v}"${planMethod(plan) === v ? ' checked' : ''}><span>${l}</span></label>`).join('')}
+          </div></div>
         <div class="alloc">
           <div id="plan-donut"></div>
           <div class="alloc-rows">
@@ -1267,7 +1295,7 @@ function renderPlan(el) {
                   <span class="dot" style="background:${al.assetId ? assetColor(al.assetId) : 'var(--border)'}"></span>
                   <div class="combo">
                     <label class="sr-only" for="al-q-${i}">Instrument</label>
-                    <input id="al-q-${i}" name="al-q" class="combo-input" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="al-list-${i}" autocomplete="off" spellcheck="false" placeholder="Search name or ticker" value="${a ? esc(`${a.name} (${a.symbol})`) : ''}">
+                    <input id="al-q-${i}" name="al-q" class="combo-input" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="al-list-${i}" autocomplete="off" spellcheck="false" placeholder="Search name or ticker" value="${esc(assetLabel(a))}">
                     <input type="hidden" name="al-asset" value="${esc(al.assetId || '')}">
                     <ul class="combo-list" id="al-list-${i}" role="listbox" hidden></ul>
                   </div>
@@ -1276,8 +1304,12 @@ function renderPlan(el) {
                   <button class="icon-btn" type="button" data-act="del-alloc" aria-label="Remove from plan">${icon('x', 18)}</button>
                 </div>
                 <div class="alloc-target">
-                  <label for="al-t-${i}">Target</label>
-                  <div class="ccy-input"><input id="al-t-${i}" name="al-target" type="number" inputmode="decimal" min="0" step="any" placeholder="ATH" value="${inputNum(al.target ?? athNative(al.assetId))}" data-default="${inputNum(athNative(al.assetId))}"><span>${esc(a?.currency || 'USD')}</span></div>
+                  <div class="seg mini" role="radiogroup" aria-label="Predict ${esc(a?.name || 'this asset')} by">
+                    <label><input type="radio" name="al-m-${i}" value="target"${al.method !== 'cagr' ? ' checked' : ''}><span>Target</span></label>
+                    <label><input type="radio" name="al-m-${i}" value="cagr"${al.method === 'cagr' ? ' checked' : ''}><span>CAGR</span></label>
+                  </div>
+                  <div class="ccy-input"${al.method === 'cagr' ? ' hidden' : ''}><label class="sr-only" for="al-t-${i}">Target price</label><input id="al-t-${i}" name="al-target" type="number" inputmode="decimal" min="0" step="any" placeholder="ATH" value="${inputNum(al.target ?? athNative(al.assetId))}" data-default="${inputNum(athNative(al.assetId))}"><span>${esc(a?.currency || 'USD')}</span></div>
+                  <div class="ccy-input"${al.method === 'cagr' ? '' : ' hidden'}><label class="sr-only" for="al-c-${i}">CAGR, % a year</label><input id="al-c-${i}" name="al-cagr" type="number" inputmode="decimal" step="any" placeholder="CAGR" value="${al.cagr ?? ''}" data-default=""><span>%/yr</span></div>
                   <span class="alloc-up small" id="al-up-${i}"></span>
                 </div>
               </div>`;
@@ -1298,15 +1330,17 @@ function renderPlan(el) {
   const form = $('#plan-form', el);
   form.addEventListener('input', () => savePlanForm(form));
   form.addEventListener('change', (e) => {
+    // The total switch sets every asset at once
+    if (e.target.name === 'all-method') return editAlloc((p) => p.allocations.forEach((al) => { al.method = e.target.value; }));
     savePlanForm(form);
-    if (e.target.name === 'mode') render();
+    if (e.target.name === 'mode' || e.target.name.startsWith('al-m-')) render();
   });
   $$('.alloc-row', form).forEach((row) => {
     const i = +row.dataset.i;
     bindCombo($('[name=al-q]', row), {
       exclude: () => new Set(currentPlan().allocations.filter((_, k) => k !== i).map((al) => al.assetId)),
       onPick: (id) => {
-        editAlloc((p) => { p.allocations[i] = { ...p.allocations[i], assetId: id, target: null }; });
+        editAlloc((p) => { p.allocations[i] = { ...p.allocations[i], assetId: id, target: null, cagr: null }; });
         $(`#al-p-${i}`)?.focus();
       },
     });
@@ -1318,7 +1352,12 @@ function savePlanForm(form) {
   const plan = currentPlan();
   const assetsSel = $$('[name=al-asset]', form).map((s) => s.value);
   const pcts = $$('[name=al-pct]', form).map((i) => parseFloat(i.value) || 0);
-  // A target equal to the ATH isn't stored, so it keeps following the ATH
+  const methods = $$('.alloc-row', form).map((row) => $('[name^=al-m-]:checked', row)?.value || 'target');
+  // Values equal to their defaults (ATH, historical CAGR) aren't stored, so they keep following them
+  const cagrs = $$('[name=al-cagr]', form).map((i) => {
+    const v = parseFloat(i.value);
+    return isFinite(v) && i.value !== i.dataset.default ? v : null;
+  });
   const targets = $$('[name=al-target]', form).map((i) => {
     const v = parseFloat(i.value);
     return v > 0 && i.value !== i.dataset.default ? v : null;
@@ -1333,7 +1372,8 @@ function savePlanForm(form) {
     p.durationUnit = form.durationUnit.value;
     p.frequency = form.frequency.value;
     p.startDate = form.startDate.value || todayISO();
-    p.allocations = assetsSel.map((assetId, i) => ({ assetId, pct: pcts[i], target: targets[i] }));
+    p.horizonYears = Math.max(0.5, parseFloat(form.horizonYears.value) || 5);
+    p.allocations = assetsSel.map((assetId, i) => ({ assetId, pct: pcts[i], target: targets[i], method: methods[i], cagr: cagrs[i] }));
   }, { silent: true });
   updatePlanResults();
 }
@@ -1352,18 +1392,32 @@ function updatePlanResults() {
     sumEl.innerHTML = off ? `${icon('alert', 16)} Total ${fmtNum(s.allocated, 2)}%. Adjust to 100%.`
       : unpicked ? `${icon('alert', 16)} Pick an instrument for every row.` : `${icon('check', 16)} Total 100%`;
   }
-  // Target fields follow the ATH until you type your own; upside under each one
+  // Inputs follow their defaults (ATH, historical CAGR) until you type your own; the projection under each one
+  const by = s.horizon ? fmtDate(s.horizon, { month: 'short', year: 'numeric' }) : '';
+  const hz = $('#p-horizon-hint');
+  if (hz) hz.textContent = s.horizon ? `For CAGR predictions: growth is counted to ${fmtDate(s.horizon)}.` : '';
   $$('.alloc-row').forEach((row) => {
     const i = +row.dataset.i, al = plan.allocations[i], r = s.allocations[i];
     if (!al || !r) return;
-    const inp = $('[name=al-target]', row), up = $('.alloc-up', row);
+    const up = $('.alloc-up', row);
+    if (!al.assetId) { up.innerHTML = ''; return; }
+    if (al.method === 'cagr') {
+      const inp = $('[name=al-cagr]', row);
+      const h = histCagr(al.assetId);
+      inp.dataset.default = h ? String(round(h.cagr, 1)) : '';
+      if (al.cagr == null && document.activeElement !== inp) inp.value = inp.dataset.default;
+      up.innerHTML = r.upside == null ? `<span class="muted">${h === undefined ? 'Loading history...' : 'Enter a CAGR'}</span>`
+        : `<span class="num ${tone(r.upside)}">${fmtPct(r.upside)}</span> <span class="muted">by ${by}</span>${al.cagr != null && h
+          ? ` · <button type="button" class="link-btn muted" data-act="cagr-hist" data-i="${i}">Use history</button>` : al.cagr == null && h ? ` <span class="muted">· ${Math.round(h.years)}Y history</span>` : ''}`;
+      return;
+    }
+    const inp = $('[name=al-target]', row);
     const ath = athNative(al.assetId);
     inp.dataset.default = inputNum(ath);
     if (al.target == null && document.activeElement !== inp) inp.value = inputNum(ath);
     const ccy = assetById(al.assetId)?.currency || 'USD';
     const now = nativePrice(al.assetId);
-    up.innerHTML = !al.assetId ? ''
-      : r.upside == null ? `<span class="muted">${now == null ? 'Waiting for price' : 'Enter a target price'}</span>`
+    up.innerHTML = r.upside == null ? `<span class="muted">${now == null ? 'Waiting for price' : 'Enter a target price'}</span>`
       : `<span class="num ${tone(r.upside)}">${fmtPct(r.upside)}</span> <span class="muted num">from ${fmtMoney(now, ccy)}</span>${al.target != null && ath
         ? ` · <button type="button" class="link-btn muted" data-act="target-ath" data-i="${i}">Use ATH</button>` : al.target == null ? ' <span class="muted">· ATH</span>' : ''}`;
   });
@@ -1381,9 +1435,9 @@ function updatePlanResults() {
   res.innerHTML = `
     <div class="plan-hero">
       <div class="plan-gain">
-        <span class="eyebrow">Potential gain at your targets</span>
+        <span class="eyebrow">${{ target: 'Potential gain at your targets', cagr: `Projected gain by ${by}`, mixed: `Projected gain (targets and CAGR to ${by})` }[planMethod(plan)]}</span>
         <strong class="hero num ${tone(s.gain)}">${s.gain != null ? smoney(s.gain) : '-'}</strong>
-        <span class="small num">${s.gain != null ? `<span class="${tone(s.gain)}">${fmtPct(s.gainPct)}</span> <span class="muted">· worth ${money(s.atTarget)} on ${money(s.total)} invested</span>` : '<span class="muted">Add target prices to see it</span>'}</span>
+        <span class="small num">${s.gain != null ? `<span class="${tone(s.gain)}">${fmtPct(s.gainPct)}</span> <span class="muted">· worth ${money(s.atTarget)} on ${money(s.total)} invested</span>` : '<span class="muted">Add a target or CAGR to see it</span>'}</span>
       </div>
       <div class="kpis">
         <div class="kpi"><span class="label">Buys</span><strong class="num">${s.n}</strong><span class="small muted">${FREQS[plan.frequency].toLowerCase()}</span></div>
@@ -1393,16 +1447,16 @@ function updatePlanResults() {
       </div>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Asset</th><th class="r">Share</th><th class="r">Per buy</th><th class="r">Over plan</th><th class="r">Units now</th><th class="r">Target</th><th class="r">Upside</th><th class="r">At target</th><th class="r">Gain</th></tr></thead>
+      <thead><tr><th>Asset</th><th class="r">Share</th><th class="r">Per buy</th><th class="r">Over plan</th><th class="r">Units now</th><th class="r">Prediction</th><th class="r">Upside</th><th class="r">Projected</th><th class="r">Gain</th></tr></thead>
       <tbody>${s.allocations.map((a) => `<tr><td><span class="dot" style="background:${a.assetId ? assetColor(a.assetId) : 'var(--border)'}"></span>${esc(assetName(a.assetId))}</td>
         <td class="r num">${fmtPct(+a.pct || 0, { signed: false, digits: 1 })}</td><td class="r num">${money(a.amount)}</td><td class="r num">${money(a.total)}</td>
         <td class="r num">${a.units != null ? fmtNum(a.units, 6) : '-'}</td>
-        <td class="r num">${a.target != null ? fmtMoney(a.target, assetById(a.assetId)?.currency || 'USD') : '-'}</td>
+        <td class="r num">${a.method === 'cagr' ? (a.cagr != null ? `${fmtPct(a.cagr, { digits: 1 })}/yr` : '-') : a.target != null ? fmtMoney(a.target, assetById(a.assetId)?.currency || 'USD') : '-'}</td>
         <td class="r num ${tone(a.upside)}">${fmtPct(a.upside, { digits: 1 })}</td>
         <td class="r num">${money(a.atTarget)}</td>
         <td class="r num ${tone(a.gain)}">${a.gain != null ? smoney(a.gain) : '-'}</td></tr>`).join('')}</tbody>
     </table></div>
-    <p class="footnote">Gains assume every buy fills at today's price and each asset then reaches its target. ${s.missingTargets ? `${s.missingTargets} asset${s.missingTargets === 1 ? ' has' : 's have'} no target yet and ${s.missingTargets === 1 ? 'is' : 'are'} left out. ` : ''}Buys fall on trading days only: weekends${mk.length ? ` and ${mk.join(', ')} holidays` : ''} are skipped.</p>`;
+    <p class="footnote">${planMethod(plan) !== 'cagr' ? "Price targets assume every buy fills at today's price and the asset then reaches its target. " : ''}${planMethod(plan) !== 'target' ? `CAGR compounds each buy from its own date to ${fmtDate(s.horizon)}. ` : ''}${s.missingTargets ? `${s.missingTargets} asset${s.missingTargets === 1 ? ' has' : 's have'} no prediction yet and ${s.missingTargets === 1 ? 'is' : 'are'} left out. ` : ''}Buys fall on trading days only: weekends${mk.length ? ` and ${mk.join(', ')} holidays` : ''} are skipped.</p>`;
 
   const done = new Set(plan.executed || []);
   const today = todayISO();
@@ -1486,7 +1540,7 @@ function appData() {
     },
     plans: state.plans.map((p) => {
       const s = summarizePlan(p);
-      return { name: p.name, mode: p.mode === 'total' ? 'spread total capital' : 'fixed amount per buy', frequency: p.frequency, firstBuy: p.startDate, lastBuy: s.end, buys: s.n, perBuy: round(s.perBuy), total: round(s.total), buysLogged: (p.executed || []).length, potentialGainAtTargets: s.gain != null ? round(s.gain) : null, allocation: s.allocations.map((a) => ({ asset: assetName(a.assetId), pct: a.pct, targetPrice: a.target, upsidePct: a.upside != null ? round(a.upside) : null })) };
+      return { name: p.name, mode: p.mode === 'total' ? 'spread total capital' : 'fixed amount per buy', frequency: p.frequency, firstBuy: p.startDate, lastBuy: s.end, buys: s.n, perBuy: round(s.perBuy), total: round(s.total), buysLogged: (p.executed || []).length, projectedGain: s.gain != null ? round(s.gain) : null, cagrHorizon: s.horizon, allocation: s.allocations.map((a) => ({ asset: assetName(a.assetId), pct: a.pct, predictBy: a.method, targetPrice: a.target, cagrPct: a.cagr != null ? round(a.cagr, 1) : null, upsidePct: a.upside != null ? round(a.upside) : null })) };
     }),
   };
 }
@@ -1811,6 +1865,7 @@ const ACTIONS = {
     $$('[name=al-q]').pop()?.focus();
   },
   'target-ath': (_, btn) => editAlloc((p) => { p.allocations[+btn.dataset.i].target = null; }),
+  'cagr-hist': (_, btn) => editAlloc((p) => { p.allocations[+btn.dataset.i].cagr = null; }),
   'del-alloc': (_, btn) => editAlloc((p) => p.allocations.splice(+btn.closest('[data-i]').dataset.i, 1)),
   'even-split': () => editAlloc((p) => {
     const n = p.allocations.length;
