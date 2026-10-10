@@ -15,7 +15,7 @@ function at(series, date) {
 }
 
 // Yahoo symbol for an asset's price history
-function historySymbol(a) {
+export function historySymbol(a) {
   if (a.yahoo) return a.yahoo;
   if (a.histSymbol) return a.histSymbol;
   if (a.source === 'coingecko') return `${a.symbol}-USD`;

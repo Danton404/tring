@@ -2,7 +2,8 @@ import { store, uid, pull, push, syncEnabled, clearLocal } from './store.js';
 import { hosted, cloud, initAuth, signInWithGoogle, signOut, loadInfo, serverKeys } from './cloud.js';
 import * as market from './market.js';
 import { holdings, planSummary, indicators } from './calc.js';
-import { parseCsv, isT212, summarize, buildTransactions } from './importer.js';
+import { parseCsv, isT212, summarize, buildTransactions, buildCashflows } from './importer.js';
+import { t212Cash, incomeSummary, exposure, FACTORS } from './analytics.js';
 import { portfolioHistory, cachedHistory } from './history.js';
 import { ask, PROVIDERS, modelFor, availableProviders, activeProvider } from './ai.js';
 import { initFx } from './fx.js';
@@ -389,9 +390,46 @@ function dayPnl(open) {
   return any ? { gain, pct: prev > 0 ? (gain / prev) * 100 : null } : null;
 }
 
-const cash = () => store.state.cash || { amount: 0, show: false };
+// Cash: calculated from Trading 212 imports, or entered by hand
+const cash = () => {
+  const c = store.state.cash || { amount: 0, show: false };
+  const calc = t212Cash(store.state);
+  const auto = c.source === 't212' && calc != null;
+  return { ...c, manual: +c.amount || 0, calc, auto, amount: auto ? Math.max(0, round(calc)) : +c.amount || 0 };
+};
 const initials = (a) => (a?.symbol || a?.name || '?').replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase() || '?';
-const avatar = (id) => `<span class="avatar" style="--c:${assetColor(id)}" aria-hidden="true">${esc(initials(assetById(id)))}</span>`;
+// Instrument logos: CoinGecko for crypto, Parqet by ISIN (stocks and ETFs), then by ticker, then FMP.
+// Letters stay underneath as the last fallback.
+const LOGO_MISS_KEY = 'tring.logo.miss.v1';
+const logoMiss = (() => { try { return new Set(JSON.parse(localStorage.getItem(LOGO_MISS_KEY)) || []); } catch { return new Set(); } })();
+function logoSources(a) {
+  if (!a) return [];
+  const out = [];
+  const cg = market.logo(a.id);
+  if (cg) out.push(cg);
+  if (a.isin) out.push(`https://assets.parqet.com/logos/isin/${a.isin}?format=png&size=100`);
+  const sym = (a.symbol || '').split(/[./]/)[0].toUpperCase();
+  if (a.kind === 'crypto' && sym) out.push(`https://assets.parqet.com/logos/crypto/${encodeURIComponent(sym)}?format=png&size=100`);
+  // Ticker lookups only for US listings; European tickers are ambiguous, so those rely on the ISIN
+  const us = a.source === 'twelve' || (a.currency || 'USD') === 'USD';
+  if (sym && us && !['crypto', 'fx', 'commodity'].includes(a.kind)) {
+    out.push(`https://assets.parqet.com/logos/symbol/${encodeURIComponent(sym)}?format=png&size=100`, `https://financialmodelingprep.com/image-stock/${encodeURIComponent(sym)}.png`);
+  }
+  return out.filter((u) => !logoMiss.has(u));
+}
+window.tringLogoFail = (img) => {
+  logoMiss.add(img.src.replace(/&amp;/g, '&'));
+  try { localStorage.setItem(LOGO_MISS_KEY, JSON.stringify([...logoMiss].slice(-300))); } catch { /* ignore */ }
+  const rest = (img.dataset.next || '').split('|').filter(Boolean);
+  if (rest.length) { img.dataset.next = rest.slice(1).join('|'); img.src = rest[0]; } else img.remove();
+};
+const avatar = (id, size = '') => {
+  const a = assetById(id);
+  const [first, ...rest] = logoSources(a);
+  const glyph = a?.kind === 'commodity' ? icon('gem', 18) : a?.kind === 'fx' ? icon('banknote', 18) : esc(initials(a));
+  return `<span class="avatar${size ? ` ${size}` : ''}" style="--c:${assetColor(id)}" aria-hidden="true">${glyph}${first
+    ? `<img src="${esc(first)}" data-next="${esc(rest.join('|'))}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="tringLogoFail(this)">` : ''}</span>`;
+};
 const pnl = (r) => (r ? `<span class="num ${tone(r.gain)}">${smoney(r.gain)}${r.pct != null ? ` <span class="pct">(${fmtPct(r.pct)})</span>` : ''}</span>` : '<span class="muted">-</span>');
 const statRow = (label, value) => `<div class="stat"><span class="eyebrow">${label}</span><span class="num">${value}</span></div>`;
 
@@ -476,6 +514,9 @@ function renderPortfolio(el) {
           : '<div class="skeleton" style="height:120px"></div>'}
       </section>
 
+      <section class="panel income-panel" id="income" aria-label="Cash and income"></section>
+      <section class="panel expo-panel" aria-label="Exposure"><h2 class="eyebrow">What drives your portfolio</h2><div id="expo"></div></section>
+
       <section class="panel tx-panel" id="tx-section"></section>
     </div>`;
 
@@ -506,6 +547,85 @@ function renderPortfolio(el) {
   loadPerf();
   renderPerf();
   renderTx();
+  renderIncome(totals);
+  renderExposure(open, c);
+}
+
+// ---------- Cash and income (from Trading 212 imports)
+
+function renderIncome(totals) {
+  const box = $('#income');
+  if (!box) return;
+  const t212Value = holdings(store.state.transactions.filter((t) => t.extId?.startsWith('t212:')), priceOf).totals.value;
+  const inc = incomeSummary(store.state, t212Value);
+  if (!inc) {
+    box.innerHTML = `<h2 class="eyebrow">Cash and income</h2>
+      <div class="income-empty"><p class="small muted">Import your Trading 212 files again to add cash, deposits, dividends, interest and fees. Trades you already have are skipped.</p>
+      <button class="btn small" type="button" data-act="import-t212">${icon('upload', 16)}Import</button></div>`;
+    return;
+  }
+  const years = Object.entries(inc.divByYear).sort((a, b) => a[0].localeCompare(b[0])).slice(-6);
+  const maxYear = Math.max(...years.map(([, v]) => v), 1);
+  const yoc = totals.totalCost ? (inc.dividends12m / totals.totalCost) * 100 : null;
+  const payers = Object.entries(inc.divByAsset).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  box.innerHTML = `
+    <h2 class="eyebrow">Cash and income</h2>
+    <div class="income-grid">
+      <div class="box">
+        ${statRow('Cash (Trading 212)', money(inc.cash))}
+        ${statRow('Deposited', money(inc.deposits))}
+        ${statRow('Withdrawn and spent', money(inc.outflows))}
+        ${statRow('Total gain', inc.totalGain != null ? `<span class="${tone(inc.totalGain)}">${smoney(inc.totalGain)}${inc.totalGainPct != null ? ` (${fmtPct(inc.totalGainPct)})` : ''}</span>` : '-')}
+        ${statRow('Return per year', inc.mwr != null ? `<span class="${tone(inc.mwr)}">${fmtPct(inc.mwr)}</span>` : '<span class="muted">needs full history</span>')}
+      </div>
+      <div class="box">
+        ${statRow('Dividends, 12M', `${money(inc.dividends12m)}${yoc != null ? ` <span class="muted">${fmtPct(yoc, { signed: false })} on cost</span>` : ''}`)}
+        ${statRow('Dividends, all time', money(inc.dividends))}
+        ${statRow('Interest', money(inc.interest))}
+        ${statRow('Fees paid', money(inc.fees))}
+      </div>
+    </div>
+    ${years.length ? `<div class="div-years" aria-label="Dividends per year">${years.map(([y, v]) => `
+      <div class="div-year"><span class="eyebrow">${y}</span><span class="bar"><i style="width:${(v / maxYear) * 100}%"></i></span><span class="num small">${money(v)}</span></div>`).join('')}</div>` : ''}
+    ${payers.length ? `<p class="small muted payers">Top payers: ${payers.map(([id, v]) => `${esc(assetName(id))} <span class="num">${money(v)}</span>`).join(' · ')}</p>` : ''}
+    ${inc.complete ? '' : `<p class="small warn">Imports start ${fmtDate(inc.since)}${inc.cash < 0 ? ' and cash comes out negative' : ''}. Add exports back to when the account opened for exact cash and return.</p>`}`;
+}
+
+// ---------- Exposure look-through: group holdings by the market that moves them
+
+const expo = { key: null, data: null, error: null };
+function renderExposure(open, c) {
+  const box = $('#expo');
+  if (!box) return;
+  const rows = open.filter((r) => r.value > 0).map((r) => ({ assetId: r.assetId, value: r.value }));
+  if (!rows.length) { box.innerHTML = '<p class="muted small">Waiting for prices.</p>'; return; }
+  const key = rows.map((r) => `${r.assetId}:${Math.round(r.value)}`).join(',');
+  const draw = () => {
+    if (expo.error) { box.innerHTML = `<p class="muted small">${esc(expo.error)}</p>`; return; }
+    if (!expo.data) { box.innerHTML = '<span class="skeleton" style="height:120px"></span>'; return; }
+    const { groups, concentration: k } = expo.data;
+    const list = (g) => g.holdings.map((h) => esc(assetName(h.assetId))).join(', ');
+    box.innerHTML = `
+      <div class="expo-kpis">
+        <div><span class="eyebrow">Largest holding</span><strong class="num">${fmtPct(k.top1, { signed: false, digits: 1 })}</strong></div>
+        <div><span class="eyebrow">Top 3</span><strong class="num">${fmtPct(k.top3, { signed: false, digits: 1 })}</strong></div>
+        <div><span class="eyebrow">Effective holdings</span><strong class="num">${k.effective.toFixed(1)} <span class="muted small">of ${k.count}</span></strong></div>
+      </div>
+      <ul class="expo-list">${groups.map((g) => `
+        <li>
+          <div class="expo-row"><span class="expo-name">${esc(g.label)}</span><span class="num">${money(g.value)} <span class="muted">${fmtPct(g.pct, { signed: false, digits: 1 })}</span></span></div>
+          <span class="bar"><i style="width:${g.pct}%"></i></span>
+          <p class="small muted">${list(g)}${g.equiv != null && Math.abs(g.equiv - g.value) / g.value > 0.1 ? ` · moves like ${money(g.equiv)} of ${esc(g.label.split(' (')[0])}` : ''}</p>
+        </li>`).join('')}</ul>
+      ${c.show && c.amount > 0 ? `<p class="small muted">Cash ${money(c.amount)} not included.</p>` : ''}`;
+  };
+  if (expo.key !== key) {
+    expo.key = key; expo.error = null;
+    exposure(rows, assetById)
+      .then((d) => { if (expo.key === key) { expo.data = d; if (ui.tab === 'portfolio') renderExposure(open, c); } })
+      .catch((e) => { if (expo.key === key) { expo.error = e.message; if (ui.tab === 'portfolio') renderExposure(open, c); } });
+  }
+  draw();
 }
 
 function renderPnl() {
@@ -571,18 +691,25 @@ function openCash() {
   const c = cash();
   openSheet('Cash', `
     <form class="form" id="cash-form" novalidate>
-      <div class="field"><label for="cash-amt">Cash on hand (${base()})</label><input id="cash-amt" name="amount" type="number" inputmode="decimal" step="any" min="0" value="${c.amount || ''}" placeholder="0.00"></div>
+      ${c.calc != null ? `<div class="field"><span class="label" id="cash-src-label">Source</span>
+        <div class="seg full" role="radiogroup" aria-labelledby="cash-src-label">
+          <label><input type="radio" name="source" value="t212"${c.auto ? ' checked' : ''}><span>Trading 212 · ${money(c.calc)}</span></label>
+          <label><input type="radio" name="source" value="manual"${c.auto ? '' : ' checked'}><span>Manual</span></label>
+        </div></div>` : ''}
+      <div class="field" id="cash-manual"${c.auto ? ' hidden' : ''}><label for="cash-amt">Cash on hand (${base()})</label><input id="cash-amt" name="amount" type="number" inputmode="decimal" step="any" min="0" value="${c.manual || ''}" placeholder="0.00"></div>
       <label class="check"><input type="checkbox" name="show"${c.show ? ' checked' : ''}><span>Show in portfolio value</span></label>
       <button class="btn primary block" type="submit">Save</button>
     </form>`, (body, close) => {
     const f = $('#cash-form', body);
+    const src = () => f.querySelector('[name=source]:checked')?.value || 'manual';
+    f.addEventListener('change', () => { $('#cash-manual', body).hidden = src() === 't212'; });
     f.onsubmit = (e) => {
       e.preventDefault();
       const amount = Math.max(0, parseFloat(f.amount.value) || 0);
-      store.update((s) => { s.cash = { amount: round(amount), show: f.show.checked }; });
+      store.update((s) => { s.cash = { amount: round(amount), show: f.show.checked, source: src() }; });
       close();
     };
-    f.amount.focus();
+    if (src() === 'manual') f.amount.focus();
   });
 }
 
@@ -703,8 +830,8 @@ function renderTx() {
     <p class="small muted num">${list.length} of ${all.length}${list.length ? ` · ${money(list.reduce((s, t) => s + (t.type === "buy" ? amount(t) : t.type === "sell" ? -amount(t) : 0), 0))} net bought` : ''}</p>
     ${pageItems.length ? `<ul class="tx-list">${pageItems.map((t) => `
       <li data-id="${t.id}">
-        <span class="chip ${t.type}">${typeLabel[t.type] || t.type}</span>
-        <div class="tx-main"><strong>${esc(assetName(t.assetId))}</strong><span class="small muted num">${fmtDate(t.date)} · ${fmtNum(t.qty)}${t.type === 'split' ? ' shares' : ` @ ${money(t.price)}`}${t.note ? ` · ${esc(t.note)}` : ''}</span></div>
+        ${avatar(t.assetId, 'sm')}
+        <div class="tx-main"><strong>${esc(assetName(t.assetId))} <span class="chip ${t.type}">${typeLabel[t.type] || t.type}</span></strong><span class="small muted num">${fmtDate(t.date)} · ${fmtNum(t.qty)}${t.type === 'split' ? ' shares' : ` @ ${money(t.price)}`}${t.note ? ` · ${esc(t.note)}` : ''}</span></div>
         <span class="num">${t.type === 'split' ? '' : money(amount(t))}</span>
         <button class="icon-btn" type="button" data-act="del-tx" aria-label="Delete transaction">${icon('trash', 18)}</button>
       </li>`).join('')}</ul>` : '<p class="muted">No transactions match these filters.</p>'}
@@ -809,7 +936,7 @@ function openImport() {
           rows.push(...parsed);
         }
         summary = summarize(rows);
-        if (!summary.trades.length) throw new Error('No trades found in these files.');
+        if (!summary.trades.length && !summary.cash.length) throw new Error('No trades or cash rows found in these files.');
       } catch (ex) {
         summary = null;
         err.textContent = ex.message;
@@ -822,7 +949,7 @@ function openImport() {
       const converted = [...new Set(summary.trades.map((r) => r['Currency (Total)']).filter((c) => c && c !== summary.base))];
       box.innerHTML = `
         <div class="card imp-card">
-          <p><strong>${summary.trades.length} trades</strong> from ${fmtDate(summary.from)} to ${fmtDate(summary.to)}${summary.skipped ? ` <span class="muted">(${summary.skipped} other rows skipped)</span>` : ''}</p>
+          <p><strong>${summary.trades.length} trades</strong>${summary.trades.length ? ` from ${fmtDate(summary.from)} to ${fmtDate(summary.to)}` : ''}${summary.cash.length ? `, <strong>${summary.cash.length} cash rows</strong> <span class="muted">(${Object.entries(summary.cashKinds).map(([k, n]) => `${n} ${k}`).join(', ')})</span>` : ''}${summary.skipped ? ` <span class="muted">(${summary.skipped} other rows skipped)</span>` : ''}</p>
           <p class="small">Portfolio currency: <strong>${summary.base}</strong>.${converted.length ? ` Amounts in ${converted.join(', ')} are converted at each trade date's rate${converted.includes('BGN') ? ' (BGN at the fixed 1.95583)' : ''}.` : ''}</p>
           ${summary.partial.length ? `<p class="small warn">Some sells include shares bought before ${fmtDate(summary.from)} (${summary.partial.map(esc).join(', ')}). Add an older export too for complete realized P/L.</p>` : ''}
           <p class="small"><strong>${open.length} open positions:</strong> ${open.map((a) => esc(a.name)).join(', ') || 'none'}${closed ? `. ${closed} closed positions are kept for realized P/L.` : '.'}</p>
@@ -850,7 +977,8 @@ function openImport() {
           // Reuse assets already linked to an ISIN, create the rest
           const existing = new Map(store.state.assets.filter((a) => a.isin).map((a) => [a.isin, a]));
           const ids = new Map(summary.assets.map((a) => [a.isin, existing.get(a.isin)?.id || uid()]));
-          const { txs, lastPrice } = buildTransactions(summary, fx, (isin) => ids.get(isin), uid);
+          const { txs, lastPrice } = buildTransactions(summary, fx, (isin) => ids.get(isin) || existing.get(isin)?.id, uid);
+          const flows = buildCashflows(summary, fx, (isin) => ids.get(isin) || existing.get(isin)?.id);
 
           const newAssets = [];
           const updates = new Map();
@@ -888,10 +1016,13 @@ function openImport() {
             if (replace) s.transactions = s.transactions.filter((t) => t.extId?.startsWith('t212:'));
             const have = new Set(s.transactions.map((t) => t.extId).filter(Boolean));
             s.transactions.push(...txs.filter((t) => !have.has(t.extId)));
+            const haveFlow = new Set((s.cashflows || []).map((f) => f.extId));
+            s.cashflows = [...(s.cashflows || []), ...flows.filter((f) => !haveFlow.has(f.extId))].sort((a, b) => a.date.localeCompare(b.date));
+            if (flows.length && !s.cash?.amount) s.cash = { ...(s.cash || {}), source: 't212', show: true };
           });
           const unpriced = newAssets.filter((x) => x.source === 'none' && !x.archived).length;
           close();
-          toast(`Imported ${txs.length} trades${unpriced ? `. ${unpriced} holding${unpriced === 1 ? '' : 's'} use the last trade price` : ''}`);
+          toast(`Imported ${txs.length} trades${flows.length ? ` and ${flows.length} cash rows` : ''}${unpriced ? `. ${unpriced} holding${unpriced === 1 ? '' : 's'} use the last trade price` : ''}`);
           await refresh();
         } catch (ex) {
           err.textContent = `Import failed: ${ex.message}`;
@@ -1131,6 +1262,14 @@ function appData() {
       holdings: h.open.map((r) => ({ asset: assetName(r.assetId), qty: r.qty, avgCost: round(r.avg, 4), costBasis: round(r.cost), price: r.price, value: r.value != null ? round(r.value) : null, unrealizedPL: r.pl != null ? round(r.pl) : null, unrealizedPLPct: r.plPct != null ? round(r.plPct) : null, valueAtAth: r.valueAtAth != null ? round(r.valueAtAth) : null })),
       recentTransactions: [...state.transactions].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 25).map((t) => ({ date: t.date, type: t.type, asset: assetName(t.assetId), qty: t.qty, price: t.price, fee: t.fee })),
       dailySnapshots: state.snapshots.slice(-60),
+      cashAndIncome: (() => {
+        const inc = incomeSummary(state, holdings(state.transactions.filter((t) => t.extId?.startsWith('t212:')), priceOf).totals.value);
+        return inc && Object.fromEntries(Object.entries(inc).map(([k, v]) => [k, typeof v === 'number' ? round(v) : v]));
+      })(),
+      exposure: expo.data && {
+        concentration: Object.fromEntries(Object.entries(expo.data.concentration).map(([k, v]) => [k, round(v)])),
+        groups: expo.data.groups.map((g) => ({ driver: g.label, value: round(g.value), pct: round(g.pct), factorEquivalent: g.equiv != null ? round(g.equiv) : null, holdings: g.holdings.map((h) => ({ asset: assetName(h.assetId), correlation: h.corr != null ? round(h.corr) : null, beta: h.beta != null ? round(h.beta) : null })) })),
+      },
     },
     plans: state.plans.map((p) => {
       const s = planSummary(p, priceOf);

@@ -8,8 +8,8 @@ const CACHE_KEY = 'tring.market.v1';
 const TTL = { quote: 15 * 60e3, ath: 12 * 3600e3, series: 6 * 3600e3 };
 
 const cache = (() => {
-  try { return { quotes: {}, ath: {}, series: {}, fx: {}, ...JSON.parse(localStorage.getItem(CACHE_KEY)) }; }
-  catch { return { quotes: {}, ath: {}, series: {}, fx: {} }; }
+  try { return { quotes: {}, ath: {}, series: {}, fx: {}, logos: {}, ...JSON.parse(localStorage.getItem(CACHE_KEY)) }; }
+  catch { return { quotes: {}, ath: {}, series: {}, fx: {}, logos: {} }; }
 })();
 const persist = () => {
   try { localStorage.setItem(CACHE_KEY, JSON.stringify(cache)); } catch { /* ignore */ }
@@ -22,6 +22,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const today = () => new Date().toISOString().slice(0, 10);
 
 export const quote = (id) => cache.quotes[id] || null;
+export const logo = (id) => cache.logos?.[id] || null;
 export const ath = (id) => cache.ath[id] || null;
 export const error = (id) => errors[id] || null;
 export const isLoading = (id) => loading.has(id);
@@ -155,8 +156,17 @@ export async function resolveIsin({ isin, tickers, refPriceEur, yahooOnly = fals
   return null;
 }
 
-// Daily closes for the portfolio history chart: { ccy, points: [{ date, v }] }
-export async function dailyHistory(symbol) {
+// Daily closes for the history chart and exposure: { ccy, points: [{ date, v }] }, shared per session
+const dailyMemo = new Map();
+export function dailyHistory(symbol) {
+  if (!dailyMemo.has(symbol)) {
+    const p = fetchDaily(symbol);
+    dailyMemo.set(symbol, p);
+    p.catch(() => dailyMemo.delete(symbol));
+  }
+  return dailyMemo.get(symbol);
+}
+async function fetchDaily(symbol) {
   const { meta, points } = await yahooChart(symbol, '5y', '1d');
   // London quotes in pence
   const pence = meta.currency === 'GBp' || meta.currency === 'GBX';
@@ -218,6 +228,7 @@ async function refreshCrypto(list, force) {
       ts: now,
     };
     cache.ath[a.id] = { ath: r.ath, athDate: (r.ath_date || '').slice(0, 10), ts: now };
+    if (r.image) (cache.logos ||= {})[a.id] = r.image.replace('/large/', '/small/');
     bumpAth(a.id);
   }
 }

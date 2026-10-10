@@ -11,6 +11,11 @@ echo "== TRING deploy =="
 echo
 
 # ---------- GitHub
+# Commits need an identity; fall back to the GitHub no-reply address if none is set
+if [[ -z $(git config user.email) ]]; then
+  git config user.name "Daniel Petrov Tonchev"
+  git config user.email "271995284+Danton404@users.noreply.github.com"
+fi
 git fetch -q origin main 2>/dev/null
 before=$(git rev-parse -q --verify origin/main)
 

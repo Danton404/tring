@@ -38,24 +38,41 @@ function fees(r) {
     .filter((f) => f.amount);
 }
 
+// Cash rows: what each one does to the account's cash
+export function cashKind(action) {
+  const a = action.toLowerCase();
+  if (a.startsWith('deposit')) return 'deposit';
+  if (a.startsWith('withdrawal')) return 'withdrawal';
+  if (a.startsWith('dividend')) return 'dividend';
+  if (a.includes('interest')) return 'interest';
+  if (/card debit|new card cost|spending(?! cashback)/.test(a)) return 'spend';
+  if (a.includes('currency conversion')) return null; // moves cash between currencies, not in or out
+  return 'other';
+}
+const rowKey = (r) => r.ID || `${r.Action}|${r['Time (UTC)']}|${r.ISIN || ''}|${r.Total}`;
+
 // First pass: what the files contain, before any network calls
 export function summarize(rows) {
   const seen = new Set();
   const trades = [];
+  const cash = [];
   let skipped = 0;
   for (const r of rows) {
-    if (r.ID && seen.has(r.ID)) continue; // overlapping exports
-    if (r.ID) seen.add(r.ID);
+    const key = rowKey(r);
+    if (seen.has(key)) continue; // overlapping exports
+    seen.add(key);
     const action = (r.Action || '').toLowerCase();
-    if (!r.ISIN || !/(buy|sell)$|stock split (open|close)|spin off/.test(action)) { skipped++; continue; }
-    trades.push(r);
+    if (r.ISIN && /(buy|sell)$|stock split (open|close)|spin off/.test(action)) { trades.push(r); continue; }
+    if (r.Total !== '' && r.Total != null && cashKind(action)) { cash.push(r); continue; }
+    skipped++;
   }
+  cash.sort((a, b) => a['Time (UTC)'].localeCompare(b['Time (UTC)']));
   trades.sort((a, b) => a['Time (UTC)'].localeCompare(b['Time (UTC)']));
 
   const totalCcys = new Set(trades.map((r) => r['Currency (Total)']).filter(Boolean));
   const base = totalCcys.has('EUR') || totalCcys.has('BGN') ? 'EUR' : [...totalCcys][0] || 'USD';
   const needFx = new Set();
-  for (const r of trades) {
+  for (const r of [...trades, ...cash]) {
     for (const c of [r['Currency (Total)'], ...fees(r).map((f) => f.ccy)]) {
       if (c && c !== base && !(base === 'EUR' && c === 'BGN')) needFx.add(c);
     }
@@ -78,8 +95,12 @@ export function summarize(rows) {
   }
   for (const a of byIsin.values()) a.open = a.qty > 1e-6;
 
+  const kinds = {};
+  for (const r of cash) { const k = cashKind(r.Action); kinds[k] = (kinds[k] || 0) + 1; }
   return {
     trades,
+    cash,
+    cashKinds: kinds,
     skipped,
     base,
     needFx: [...needFx],
@@ -145,4 +166,17 @@ export function buildTransactions(summary, fx, assetIdFor, uid) {
     if (Math.abs(s.delta) > 1e-9) txs.push({ id: uid(), extId: `t212:${s.id}`, type: 'split', assetId: s.assetId, date: s.date, qty: s.delta, price: 0, fee: 0, note: 'Stock split' });
   }
   return { txs, lastPrice };
+}
+
+// Cash flows in the base currency: deposits, withdrawals, dividends, interest, card spending.
+// Signed from the account's point of view (money in is positive).
+export function buildCashflows(summary, fx, assetIdFor) {
+  const toBase = converter(summary.base, fx);
+  return summary.cash.map((r) => {
+    const kind = cashKind(r.Action);
+    const date = r['Time (UTC)'].slice(0, 10);
+    const raw = toBase(num(r.Total), r['Currency (Total)'], date);
+    const amount = kind === 'other' ? raw : ['withdrawal', 'spend'].includes(kind) ? -Math.abs(raw) : Math.abs(raw);
+    return { extId: `t212:${rowKey(r)}`, kind, date, amount, ...(r.ISIN && { assetId: assetIdFor(r.ISIN), isin: r.ISIN }), ...(kind === 'other' && { note: r.Action }) };
+  }).filter((f) => f.amount);
 }

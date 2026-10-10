@@ -1,9 +1,9 @@
 // Network-first for the app shell so updates show up immediately; cache is the offline fallback.
 // API requests (other origins) are never cached here.
-const VERSION = 'tring-v11';
+const VERSION = 'tring-v13';
 const SHELL = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest', 'icon.svg',
-  'js/app.js', 'js/config.js', 'js/cloud.js', 'js/importer.js', 'js/history.js', 'js/store.js', 'js/market.js', 'js/calc.js', 'js/ai.js', 'js/ui.js', 'js/fx.js',
+  'js/app.js', 'js/config.js', 'js/cloud.js', 'js/importer.js', 'js/history.js', 'js/store.js', 'js/market.js', 'js/calc.js', 'js/ai.js', 'js/ui.js', 'js/fx.js', 'js/analytics.js',
 ];
 
 self.addEventListener('install', (e) => {
