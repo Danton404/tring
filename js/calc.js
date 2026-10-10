@@ -105,13 +105,19 @@ export function buyDates(plan, markets = []) {
 }
 
 // targetOf(assetId, allocation) -> { method: 'target', price, target } (asset's own currency) or { method: 'cagr', cagr } (% a year).
-// Target: every buy fills at today's price and the asset then reaches the target.
-// CAGR: each buy compounds from its own date to the horizon (plan.horizonYears after the first buy).
-export function planSummary(plan, priceOf, { markets = [], targetOf = () => null } = {}) {
+// Both follow every scheduled buy through time up to the horizon (plan.horizonYears after the first buy):
+// - CAGR: the price grows at the CAGR, so each buy compounds from its own date to the horizon.
+// - Target: the price climbs at a steady rate from today's price to the target at the horizon, so later
+//   buys cost more and get fewer units. Value at the horizon = units bought x target.
+export function planSummary(plan, priceOf, { markets = [], targetOf = () => null, today = new Date() } = {}) {
   const dates = buyDates(plan, markets);
   const n = dates.length;
   const horizon = plan.startDate ? addMonths(parseISO(plan.startDate), Math.round(12 * (+plan.horizonYears || 5))) : null;
-  const years = dates.map((d) => (horizon ? Math.max(0, (horizon - parseISO(d)) / (365.25 * 864e5)) : 0));
+  const YEAR = 365.25 * 864e5;
+  const years = dates.map((d) => (horizon ? Math.max(0, (horizon - parseISO(d)) / YEAR) : 0));
+  // Share of the way from today to the horizon at each buy (0 = today's price, 1 = the target)
+  const span = horizon ? Math.max(1, horizon - today) : 1;
+  const along = dates.map((d) => Math.min(1, Math.max(0, (parseISO(d) - today) / span)));
   const perBuy = n ? (plan.mode === 'fixed' ? +plan.amount || 0 : (+plan.capital || 0) / n) : 0;
   const allocated = sum(plan.allocations, (a) => +a.pct || 0);
   const allocations = plan.allocations.map((al) => {
@@ -126,9 +132,11 @@ export function planSummary(plan, priceOf, { markets = [], targetOf = () => null
         atTarget = amount * sum(years, (y) => (1 + t.cagr / 100) ** y);
         upside = (atTarget / total - 1) * 100;
       }
-    } else if (t.price > 0 && t.target > 0) {
-      upside = (t.target / t.price - 1) * 100;
-      atTarget = total * (1 + upside / 100);
+    } else if (t.price > 0 && t.target > 0 && total > 0) {
+      const ratio = t.target / t.price;
+      // Each buy: amount / price on its date, worth `target` per unit at the horizon
+      atTarget = amount * sum(along, (f) => ratio / ratio ** f);
+      upside = (atTarget / total - 1) * 100;
     }
     return { ...al, method, amount, total, price, units: price ? amount / price : null, target: method === 'target' ? t.target ?? null : null, cagr: method === 'cagr' ? t.cagr ?? null : null, upside, atTarget, gain: atTarget != null ? atTarget - total : null };
   });

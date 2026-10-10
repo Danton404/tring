@@ -392,12 +392,18 @@ tbody tr:last-child td { border-bottom: 0; }
 .ccy-input { position: relative; width: 148px; flex: none; }
 .ccy-input input { min-height: 36px; padding: 6px 46px 6px 10px; text-align: right; font-variant-numeric: tabular-nums; }
 .ccy-input span { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); font-size: 12px; font-weight: 600; color: var(--muted); pointer-events: none; }
-.alloc-up { flex: 1; min-width: 140px; }
+.alloc-out { margin-left: auto; padding-right: 10px; font-size: 15px; white-space: nowrap; }
+.alloc-out strong { font-weight: 700; }
+.alloc-note { margin: 0; padding: 0 10px 0 18px; }
+.alloc-note .link-btn { color: var(--accent); text-decoration: none; min-height: 24px; }
+.alloc-cols { display: flex; justify-content: space-between; padding: 0 48px 0 30px; font-weight: 500; }
+.alloc-head .field.inline .label { font-size: 13px; }
+/* One colour job each: the asset dot is identity, blue marks the active choice, green/red the outcome */
+.alloc-head .seg input:checked + span, .seg.mini input:checked + span { background: var(--accent-soft); color: var(--accent); }
 .alloc-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 12px; }
 .alloc-head h2 { margin: 0; }
 .seg.mini { padding: 2px; }
 .seg.mini span { min-height: 32px; padding: 0 10px; font-size: 13px; }
-.alloc-up .link-btn { font-size: 13px; min-height: 24px; }
 
 /* Instrument search (combobox) */
 .combo { position: relative; flex: 1; min-width: 0; }
