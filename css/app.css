@@ -60,6 +60,7 @@ body {
 }
 h1, h2, h3, h4 { margin: 0; line-height: 1.25; }
 h1 { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; }
+@media (min-width: 900px) { .topbar h1 { font-size: 28px; } }
 h2 { font-size: 18px; font-weight: 600; margin-bottom: 12px; }
 h3 { font-size: 16px; font-weight: 600; }
 p { margin: 0; }
@@ -143,6 +144,14 @@ input, select, textarea {
   background: var(--surface-2); color: var(--text); font: inherit; font-size: 16px;
 }
 textarea { resize: vertical; line-height: 1.4; }
+/* One chevron for every select, the same in light and dark */
+select {
+  appearance: none; -webkit-appearance: none; padding-right: 36px; cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238b909a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 12px center; background-size: 16px;
+}
+input[type=number] { -moz-appearance: textfield; appearance: textfield; }
+input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 25%, transparent); }
 .hint { font-size: 13px; color: var(--muted); }
 .form-error { color: var(--danger); font-size: 14px; min-height: 0; }
@@ -313,10 +322,16 @@ tbody tr:last-child td { border-bottom: 0; }
 .expo-name { font-weight: 600; }
 .expo-list p { margin-top: 6px; }
 .expo-panel .expo-list + p { margin-top: 14px; }
+/* Phones: the two column wrappers dissolve, so every panel follows the grid areas above */
+.port-main, .port-side { display: contents; }
 @media (min-width: 1000px) {
-  .port { grid-template-columns: 400px minmax(0, 1fr); grid-template-areas: 'hold perf' 'hold returns' 'hold breakdown' 'hold expo' 'income income' 'alloc alloc' 'tx tx'; align-items: start; }
-  .holdings-panel { max-height: calc(100dvh - 180px); display: flex; flex-direction: column; }
-  .holdings-panel .hold-list { overflow-y: auto; margin: 0 -12px; padding: 0 12px; }
+  /* Desktop: holdings stay in view beside the taller right column, so no empty gap opens below them */
+  .port { grid-template-columns: 380px minmax(0, 1fr); grid-template-areas: 'side main' 'income income' 'alloc alloc' 'tx tx'; }
+  .port-main { grid-area: main; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .port-side { grid-area: side; display: block; min-width: 0; }
+  /* .port-side prefix: outranks the light-effect rule's position: relative (sticky still anchors the effect) */
+  .port-side > .holdings-panel.panel { position: sticky; top: calc(76px + env(safe-area-inset-top)); max-height: calc(100dvh - 76px - 112px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); display: flex; flex-direction: column; }
+  .holdings-panel .hold-list { overflow-y: auto; margin: 0 -12px; padding: 0 12px; overscroll-behavior: contain; }
 }
 .perf { position: relative; }
 .perf-head { margin-bottom: 12px; }
@@ -365,11 +380,53 @@ tbody tr:last-child td { border-bottom: 0; }
 .detail-actions { display: flex; gap: 8px; align-items: center; position: sticky; bottom: 0; padding-top: 4px; background: var(--surface); }
 
 /* ---------- Plan */
-.plan-layout { display: grid; gap: 12px; grid-template-columns: 1fr; }
-@media (min-width: 1100px) { .plan-layout { grid-template-columns: 1fr 1fr; } }
-.alloc-rows { flex: 1; min-width: 240px; display: flex; flex-direction: column; gap: 8px; }
-.alloc-row { display: flex; align-items: center; gap: 8px; }
-.alloc-row select { flex: 1; min-width: 0; }
+.plan-layout { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 1100px) { .plan-layout { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); } }
+.alloc-rows { flex: 1; min-width: min(100%, 320px); display: flex; flex-direction: column; gap: 8px; }
+.alloc-row { display: flex; flex-direction: column; gap: 8px; padding: 8px 4px 10px 12px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface-2); }
+.alloc-row input { background: var(--surface); }
+.alloc-main { display: flex; align-items: center; gap: 8px; }
+.alloc-main .dot { margin-right: 0; }
+.alloc-main .pct-input { width: 80px; }
+.alloc-main .icon-btn { width: 36px; }
+.alloc-target { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; padding-left: 18px; }
+.alloc-target label { font-size: 13px; }
+.ccy-input { position: relative; width: 148px; flex: none; }
+.ccy-input input { min-height: 36px; padding: 6px 46px 6px 10px; text-align: right; font-variant-numeric: tabular-nums; }
+.ccy-input span { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); font-size: 12px; font-weight: 600; color: var(--muted); pointer-events: none; }
+.alloc-up { flex: 1; min-width: 140px; }
+.alloc-up .link-btn { font-size: 13px; min-height: 24px; }
+
+/* Instrument search (combobox) */
+.combo { position: relative; flex: 1; min-width: 0; }
+.combo-list {
+  position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 30;
+  margin: 0; padding: 6px; list-style: none; max-height: 344px; overflow-y: auto; min-width: 260px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md);
+  box-shadow: var(--highlight), 0 16px 40px oklch(0 0 0 / 0.28); animation: pop-in 150ms ease-out;
+}
+.combo-list.inline { position: static; min-width: 0; margin-top: 8px; max-height: 52dvh; box-shadow: none; animation: none; background: var(--surface-2); }
+.combo-opt { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 6px 8px; border-radius: var(--r-sm); cursor: pointer; }
+.combo-opt.active { background: var(--surface-3); }
+.combo-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.combo-name { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.combo-sub { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.combo-opt .chip { flex: none; }
+.combo-note { padding: 10px 8px; }
+/* An open list must sit above the cards that follow */
+.card:has(.combo-input[aria-expanded='true']) { z-index: 5; }
+@keyframes pop-in { from { opacity: 0; transform: translateY(-4px); } }
+.manual { margin-top: 20px; padding-top: 4px; border-top: 1px solid var(--border); }
+.manual summary { display: flex; align-items: center; min-height: 44px; font-size: 14px; font-weight: 500; color: var(--muted); cursor: pointer; }
+.manual[open] summary { margin-bottom: 8px; }
+
+/* Plan result */
+.plan-hero { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); align-items: center; margin-bottom: 20px; }
+@media (min-width: 900px) { .plan-hero { grid-template-columns: minmax(280px, 2fr) 3fr; } }
+.plan-gain { display: flex; flex-direction: column; gap: 4px; padding: 16px 18px; border-radius: var(--r-lg); background: var(--surface-2); border: 1px solid var(--border); box-shadow: var(--highlight); }
+.plan-gain .hero { font-size: 36px; }
+.card .plan-hero .kpis { margin-bottom: 0; }
+#plan-results .footnote { margin-top: 14px; }
 .pct-input { position: relative; width: 96px; flex: none; }
 .pct-input input { padding-right: 28px; text-align: right; }
 .pct-input span { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
@@ -466,6 +523,10 @@ p.warn { color: var(--warning); }
   .asset-id:hover h3 { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--border); }
   .pick:hover { border-color: var(--accent); }
   .hold:hover { background: var(--surface-2); }
+  .combo-opt:hover { background: var(--surface-3); }
+  .asset { transition: border-color 150ms ease-out; }
+  .asset:hover { border-color: color-mix(in oklch, var(--text) 16%, var(--border)); }
+  tbody tr:hover td { background: color-mix(in oklch, var(--surface-2) 60%, transparent); }
   .cn-link:hover { opacity: 1; transform: translateX(2px); }
 }
 .hold:active, .icon-btn:active, .pick:active { background: var(--surface-2); }

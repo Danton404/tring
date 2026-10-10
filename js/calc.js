@@ -1,4 +1,5 @@
 // Pure calculations: portfolio holdings, DCA plan schedule, technical indicators.
+import { isTradingDay, nextTradingDay } from './calendar.js';
 
 const sum = (arr, f = (x) => x) => arr.reduce((s, x) => s + f(x), 0);
 
@@ -80,7 +81,9 @@ function addMonths(d, n) {
 
 const STEP_DAYS = { daily: 1, weekly: 7, biweekly: 14 };
 
-export function buyDates(plan) {
+// Buy dates on trading days only: daily plans skip closed days, the others move to the next open day.
+// markets: calendars of the plan's assets (see calendar.js); weekends are always skipped.
+export function buyDates(plan, markets = []) {
   const value = Math.max(0, Math.floor(+plan.durationValue || 0));
   if (!value || !plan.startDate) return [];
   const start = parseISO(plan.startDate);
@@ -91,23 +94,40 @@ export function buyDates(plan) {
       ? addMonths(start, k)
       : new Date(start.getFullYear(), start.getMonth(), start.getDate() + k * (STEP_DAYS[plan.frequency] || 7));
     if (d >= end) break;
-    if (plan.frequency === 'daily' && (d.getDay() === 0 || d.getDay() === 6)) continue;
-    out.push(toISO(d));
+    if (plan.frequency === 'daily') {
+      if (isTradingDay(d, markets)) out.push(toISO(d));
+      continue;
+    }
+    const s = toISO(nextTradingDay(d, markets));
+    if (s !== out[out.length - 1]) out.push(s);
   }
   return out;
 }
 
-export function planSummary(plan, priceOf) {
-  const dates = buyDates(plan);
+// targetOf(assetId) -> { price, target } in the asset's own currency. Upside assumes every buy fills at today's price.
+export function planSummary(plan, priceOf, { markets = [], targetOf = () => null } = {}) {
+  const dates = buyDates(plan, markets);
   const n = dates.length;
   const perBuy = n ? (plan.mode === 'fixed' ? +plan.amount || 0 : (+plan.capital || 0) / n) : 0;
   const allocated = sum(plan.allocations, (a) => +a.pct || 0);
   const allocations = plan.allocations.map((al) => {
     const amount = (perBuy * (+al.pct || 0)) / 100;
     const price = priceOf(al.assetId);
-    return { ...al, amount, total: amount * n, price, units: price ? amount / price : null };
+    const total = amount * n;
+    const t = targetOf(al.assetId, al);
+    const upside = t?.price > 0 && t.target > 0 ? (t.target / t.price - 1) * 100 : null;
+    const atTarget = upside != null ? total * (1 + upside / 100) : null;
+    return { ...al, amount, total, price, units: price ? amount / price : null, target: t?.target ?? null, upside, atTarget, gain: atTarget != null ? atTarget - total : null };
   });
-  return { dates, n, perBuy, total: perBuy * n, allocated, allocations, end: dates[n - 1] || null };
+  const funded = allocations.filter((a) => a.total > 0);
+  const priced = funded.filter((a) => a.atTarget != null);
+  const pricedCost = sum(priced, (a) => a.total);
+  const atTarget = priced.length ? sum(priced, (a) => a.atTarget) : null;
+  return {
+    dates, n, perBuy, total: perBuy * n, allocated, allocations, end: dates[n - 1] || null,
+    atTarget, gain: atTarget != null ? atTarget - pricedCost : null, gainPct: atTarget != null && pricedCost ? (atTarget / pricedCost - 1) * 100 : null,
+    missingTargets: funded.length - priced.length,
+  };
 }
 
 // ---------- Indicators from daily closes (oldest first)

@@ -27,6 +27,8 @@ async function requireUser(req: Request) {
 }
 
 const SYMBOL = /^[A-Za-z0-9./:\-^=]{1,24}$/;
+// Searches take names too ("coinbase global", "s&p 500")
+const QUERY = /^[\p{L}\p{N} .&'/:\-^=]{1,40}$/u;
 const RANGES = ['5d', '1y', '5y', 'max'];
 const INTERVALS = ['1d', '1wk', '1mo'];
 
@@ -39,8 +41,8 @@ function ttlSeconds(path: string, params: Record<string, string>) {
 
 function cleanParams(path: string, params: Record<string, string>) {
   if (path === 'yahoo_search') {
-    if (!SYMBOL.test(params.q || '')) throw new HttpError(400, 'Invalid search.');
-    return { q: String(params.q).toUpperCase() };
+    if (!QUERY.test(String(params.q || '').trim())) throw new HttpError(400, 'Invalid search.');
+    return { q: String(params.q).trim().toUpperCase() };
   }
   if (!SYMBOL.test(params.symbol || '')) throw new HttpError(400, 'Invalid symbol.');
   const clean: Record<string, string> = { symbol: String(params.symbol).toUpperCase() };
@@ -78,7 +80,7 @@ async function yahoo(path: string, clean: Record<string, string>) {
     if (!res.ok) throw new HttpError(502, `Yahoo search error (HTTP ${res.status})`);
     const d = await res.json();
     // deno-lint-ignore no-explicit-any
-    return { quotes: (d.quotes || []).map((q: any) => ({ symbol: q.symbol, exchange: q.exchange, name: q.shortname || q.longname, type: q.quoteType })) };
+    return { quotes: (d.quotes || []).map((q: any) => ({ symbol: q.symbol, exchange: q.exchange, name: q.shortname || q.longname, type: q.quoteType, exch: q.exchDisp })) };
   }
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(clean.symbol)}?range=${clean.range}&interval=${clean.interval}`;
   const res = await fetch(url, { headers: YAHOO_HEADERS });

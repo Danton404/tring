@@ -1,4 +1,4 @@
-import { store, uid, pull, push, syncEnabled, clearLocal } from './store.js';
+import { store, uid, pull, push, syncEnabled, clearLocal, sameInstrument } from './store.js';
 import { hosted, cloud, initAuth, signInWithGoogle, signOut, loadInfo, serverKeys } from './cloud.js';
 import * as market from './market.js';
 import { holdings, planSummary, indicators } from './calc.js';
@@ -7,6 +7,7 @@ import { t212Cash, incomeSummary, exposure, FACTORS } from './analytics.js';
 import { portfolioHistory, cachedHistory } from './history.js';
 import { ask, PROVIDERS, modelFor, availableProviders, activeProvider } from './ai.js';
 import { initFx } from './fx.js';
+import { marketOf, MARKET_NAMES } from './calendar.js';
 import {
   $, $$, esc, icon, fmtMoney, fmtSignedMoney, fmtPct, fmtNum, fmtDate, todayISO, tone,
   toast, openSheet, donut, lineChart, bindScrub, bigMoney, countUp, colorAt, md,
@@ -20,7 +21,7 @@ const TABS = [
   { id: 'settings', label: 'Settings', icon: 'sliders' },
 ];
 const KINDS = { stock: 'Stock', etf: 'ETF', index: 'Index', commodity: 'Commodity', fx: 'FX', crypto: 'Crypto' };
-const FREQS = { daily: 'Daily (weekdays)', weekly: 'Weekly', biweekly: 'Every 2 weeks', monthly: 'Monthly' };
+const FREQS = { daily: 'Daily (trading days)', weekly: 'Weekly', biweekly: 'Every 2 weeks', monthly: 'Monthly' };
 const CHAT_KEY = 'tring.chat.v1';
 
 const ui = { tab: 'markets', sort: 'default', planId: null, busy: false };
@@ -39,7 +40,7 @@ const toBase = (id, n) => {
 const priceOf = (id) => toBase(id, market.quote(id)?.price ?? null) ?? assetById(id)?.lastPrice ?? null;
 const athOf = (id) => (market.ath(id)?.partial ? null : toBase(id, market.ath(id)?.ath ?? null));
 const assetById = (id) => store.state.assets.find((a) => a.id === id);
-const assetName = (id) => assetById(id)?.name || 'Removed asset';
+const assetName = (id) => (id ? assetById(id)?.name || 'Removed asset' : 'No instrument yet');
 const assetColor = (id) => colorAt(store.state.assets.findIndex((a) => a.id === id));
 const round = (n, d = 2) => Math.round(n * 10 ** d) / 10 ** d;
 
@@ -149,6 +150,120 @@ function emptyState(title, text, action = '') {
 const assetOptions = (selected, list = store.state.assets.filter((a) => !a.archived || a.id === selected)) =>
   list.map((a) => `<option value="${a.id}"${a.id === selected ? ' selected' : ''}>${esc(a.name)} (${esc(a.symbol)})</option>`).join('');
 
+// ---------- Instrument search: your assets first, then any listing (Yahoo) or coin (CoinGecko)
+
+function localMatches(q, exclude) {
+  const s = q.trim().toLowerCase();
+  const list = store.state.assets.filter((a) => !exclude.has(a.id));
+  if (!s) return list.filter((a) => !a.archived).slice(0, 8);
+  const rank = (a) => {
+    const sym = (a.symbol || '').toLowerCase(), name = a.name.toLowerCase();
+    if (sym === s || (a.isin || '').toLowerCase() === s) return 0;
+    if (sym.startsWith(s)) return 1;
+    if (name.startsWith(s)) return 2;
+    if (name.split(/[\s(.-]+/).some((w) => w.startsWith(s))) return 3;
+    if (name.replace(/\s/g, '').includes(s.replace(/\s/g, '')) || sym.includes(s)) return 4;
+    return 9;
+  };
+  return list.map((a) => ({ a, r: rank(a) })).filter((x) => x.r < 9)
+    .sort((x, y) => x.r - y.r || !!x.a.archived - !!y.a.archived).slice(0, 6).map((x) => x.a);
+}
+
+// Adds a searched instrument unless it's already on the list; returns its asset id
+function ensureAsset(found) {
+  const have = store.state.assets.find((a) => sameInstrument(a, found));
+  if (have) {
+    if (have.archived) store.update((s) => { s.assets.find((a) => a.id === have.id).archived = false; }, { silent: true });
+    return have.id;
+  }
+  const asset = { id: uid(), ...found };
+  store.update((s) => s.assets.push(asset), { silent: true });
+  market.refreshAll([asset], { onUpdate: onMarket, base: base() });
+  return asset.id;
+}
+
+// Combobox on a text input. onPick(assetId) runs once the choice is resolved (new listings are added first).
+function bindCombo(input, { exclude = () => new Set(), onPick, inline = false }) {
+  const list = document.getElementById(input.getAttribute('aria-controls'));
+  const hidden = input.parentElement.querySelector('input[type=hidden]');
+  const label = input.value;
+  let items = [], active = -1, seq = 0, timer, pending = false;
+  const open = (on) => { list.hidden = !on; input.setAttribute('aria-expanded', String(on)); };
+  const draw = () => {
+    const opt = (it, k) => `<li role="option" id="${list.id}-${k}" data-k="${k}" class="combo-opt${k === active ? ' active' : ''}" aria-selected="${k === active}">
+      ${it.local ? avatar(it.local.id, 'sm') : `<span class="avatar sm" style="--c:var(--muted)" aria-hidden="true">${esc((it.symbol || '?').replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase())}</span>`}
+      <span class="combo-main"><span class="combo-name">${esc(it.local?.name || it.name)}</span><span class="combo-sub">${esc(it.local?.symbol || it.symbol)} · ${esc(KINDS[it.local?.kind || it.kind] || '')}${it.where ? ` · ${esc(it.where)}` : ''}</span></span>
+      ${it.local ? `<span class="chip">${it.local.archived ? 'Closed' : 'Yours'}</span>` : `<span class="chip">${icon('plus', 12)}Add</span>`}
+    </li>`;
+    list.innerHTML = items.map(opt).join('')
+      + (pending ? '<li class="combo-note muted small">Searching all markets...</li>' : '')
+      + (!items.length && !pending ? `<li class="combo-note muted small">${input.value.trim().length < 2 ? 'Type a name or ticker' : 'No matches'}</li>` : '');
+    input.setAttribute('aria-activedescendant', active >= 0 ? `${list.id}-${active}` : '');
+    open(true);
+  };
+  const search = () => {
+    const q = input.value;
+    const ex = exclude();
+    const local = inline && !q.trim() ? [] : localMatches(q, ex);
+    items = local.map((a) => ({ local: a }));
+    active = items.length ? 0 : -1;
+    clearTimeout(timer);
+    pending = q.trim().length >= 2;
+    draw();
+    if (!pending) return;
+    const my = ++seq;
+    timer = setTimeout(async () => {
+      const found = await market.searchInstruments(q).catch(() => []);
+      if (my !== seq) return;
+      pending = false;
+      const have = new Set(items.map((it) => it.local.id));
+      for (const r of found) {
+        // Listings you already have show as yours
+        const mine = store.state.assets.find((a) => sameInstrument(a, { source: r.key.startsWith('cg:') ? 'coingecko' : r.key.startsWith('td:') ? 'twelve' : 'yahoo', cgId: r.key.slice(3), symbol: r.symbol, yahoo: r.symbol }));
+        if (mine) { if (!have.has(mine.id) && !ex.has(mine.id)) { have.add(mine.id); items.push({ local: mine }); } }
+        else items.push(r);
+      }
+      if (active < 0 && items.length) active = 0;
+      draw();
+    }, 300);
+  };
+  const pick = async (k) => {
+    const it = items[k];
+    if (!it) return;
+    let id = it.local?.id;
+    if (!id) {
+      input.disabled = true;
+      try { id = ensureAsset(await it.pick()); } catch (e) { toast(e.message, { kind: 'error' }); input.disabled = false; return; }
+      input.disabled = false;
+    }
+    seq++; clearTimeout(timer);
+    if (!inline) open(false);
+    if (hidden) hidden.value = id;
+    onPick(id);
+  };
+  input.addEventListener('focus', () => { if (!inline) input.select(); search(); });
+  input.addEventListener('input', search);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (list.hidden) return search();
+      if (items.length) active = (active + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+      draw();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (active >= 0) pick(active);
+    } else if (e.key === 'Escape' && !list.hidden && !inline) {
+      e.stopPropagation();
+      open(false);
+      input.value = label;
+    }
+  });
+  // pointerdown keeps focus in the input so blur doesn't close the list first
+  list.addEventListener('pointerdown', (e) => { if (e.target.closest('.combo-opt')) e.preventDefault(); });
+  list.addEventListener('click', (e) => { const o = e.target.closest('.combo-opt'); if (o) pick(+o.dataset.k); });
+  if (!inline) input.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== input) { seq++; open(false); if (!input.disabled) input.value = label; } }, 120));
+}
+
 // =====================================================================
 // Markets
 // =====================================================================
@@ -234,6 +349,11 @@ function openAddAsset() {
   const kinds = Object.entries(KINDS).map(([k, v], i) =>
     `<label><input type="radio" name="kind" value="${k}"${i === 0 ? ' checked' : ''}><span>${v}</span></label>`).join('');
   openSheet('Add asset', `
+    <div class="form add-search">
+      <div class="field"><label for="as-q">Search by name or ticker</label>
+        <div class="combo inline"><input id="as-q" class="combo-input" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="as-list" autocomplete="off" spellcheck="false" placeholder="e.g. Coinbase, COIN, gold, solana"><ul class="combo-list inline" id="as-list" role="listbox" hidden></ul></div></div>
+    </div>
+    <details class="manual"><summary>Enter a ticker instead</summary>
     <form class="form" id="asset-form" novalidate>
       <div class="field"><span class="label" id="kind-label">Type</span><div class="seg wrap" role="radiogroup" aria-labelledby="kind-label">${kinds}</div></div>
       <div class="field"><label for="as-symbol" id="as-symbol-label">Ticker symbol</label>
@@ -243,7 +363,16 @@ function openAddAsset() {
       <div id="as-results" class="pick-list"></div>
       <p class="form-error" id="as-error" role="alert"></p>
       <button class="btn primary block" type="submit">Add asset</button>
-    </form>`, (body, close) => {
+    </form></details>`, (body, close) => {
+    const shown = new Set(store.state.assets.filter((a) => !a.archived).map((a) => a.id));
+    bindCombo($('#as-q', body), {
+      inline: true,
+      onPick: (id) => {
+        close();
+        toast(shown.has(id) ? `${assetName(id)} is already on your list` : `${assetName(id)} added`);
+        render();
+      },
+    });
     const form = $('#asset-form', body);
     const hints = {
       stock: ['Ticker symbol', 'AAPL', 'Any US or international ticker on Twelve Data, e.g. NVDA, MSFT, ASML.'],
@@ -303,7 +432,7 @@ function openAddAsset() {
         btn.textContent = 'Add asset';
       }
     };
-    form.symbol.focus();
+    $('#as-q', body).focus();
   });
 }
 
@@ -460,6 +589,7 @@ function renderPortfolio(el) {
 
   el.innerHTML = `
     <div class="port">
+      <div class="port-main">
       <section class="panel perf" aria-label="Performance">
         <div class="perf-head">
           <div class="perf-title">
@@ -498,6 +628,10 @@ function renderPortfolio(el) {
         </div>
       </section>
 
+      <section class="panel expo-panel" aria-label="Exposure"><h2 class="eyebrow">What drives your portfolio</h2><div id="expo"></div></section>
+      </div>
+
+      <div class="port-side">
       <section class="panel holdings-panel" aria-label="Holdings">
         <div class="hold-head">
           <div><span class="eyebrow">Investments</span><strong class="num hold-total">${money(totals.value)}</strong></div>
@@ -507,6 +641,7 @@ function renderPortfolio(el) {
         <div class="search">${icon('search', 18)}<label class="sr-only" for="hold-q">Search portfolio</label><input id="hold-q" type="search" placeholder="Search portfolio" value="${esc(port.hq)}" autocomplete="off"></div>
         <ul class="hold-list" id="hold-list"></ul>
       </section>
+      </div>
 
       <section class="panel alloc-panel"><h2 class="eyebrow">Allocation</h2>
         ${segs.length ? `<div class="alloc">${donut(segs, { label: 'Portfolio allocation by market value', center: `${segs.length}` })}
@@ -515,7 +650,6 @@ function renderPortfolio(el) {
       </section>
 
       <section class="panel income-panel" id="income" aria-label="Cash and income"></section>
-      <section class="panel expo-panel" aria-label="Exposure"><h2 class="eyebrow">What drives your portfolio</h2><div id="expo"></div></section>
 
       <section class="panel tx-panel" id="tx-section"></section>
     </div>`;
@@ -714,7 +848,7 @@ function openCash() {
 }
 
 // Asset detail: price chart with scrubbing, and your position (Revolut / Trading 212 style)
-const SERIES_RANGES = [['1w', '1W', 7], ['1m', '1M', 30], ['3m', '3M', 91], ['6m', '6M', 182], ['1y', '1Y', 365]];
+const SERIES_RANGES = [['1w', '1W', 7], ['1m', '1M', 30], ['3m', '3M', 91], ['6m', '6M', 182], ['1y', '1Y', 365], ['5y', '5Y', 1826], ['max', 'Max', null]];
 function openAsset(id) {
   const a = assetById(id);
   if (!a) return;
@@ -755,12 +889,17 @@ function openAsset(id) {
     $('#ad-sell', body)?.addEventListener('click', () => openTx({ assetId: id, type: 'sell' }));
     $('#ad-ai', body).onclick = () => { $('#sheet').close(); ui.aiAsset = id; location.hash = 'ai'; analyzeAsset(id); };
     const box = $('#ad-chart', body);
-    let series = null;
+    // 1Y of daily closes covers the short ranges; 5Y and Max load on demand
+    const series = {};
+    const sourceFor = (r) => (r === '5y' || r === 'max' ? r : '1y');
     const draw = () => {
-      if (!series) return;
+      const src = series[sourceFor(range)];
+      if (!src) return;
       const days = SERIES_RANGES.find((r) => r[0] === range)[2];
-      const from = isoDaysAgo(days);
-      let pts = series.filter((p) => p.date >= from);
+      const from = days ? isoDaysAgo(days) : '';
+      let pts = src.filter((p) => p.date >= from);
+      // Thin long ranges so the chart stays light; the last point is always kept
+      if (pts.length > 600) { const k = Math.ceil(pts.length / 600); pts = pts.filter((_, j) => j % k === 0 || j === pts.length - 1); }
       if (price != null && pts.length && pts[pts.length - 1].date < todayISO()) pts = [...pts, { date: todayISO(), close: price }];
       if (pts.length < 2) { box.innerHTML = '<p class="muted small chart-empty">Not enough history.</p>'; return; }
       const f0 = pts[0].close, lastPx = pts[pts.length - 1].close;
@@ -781,15 +920,22 @@ function openAsset(id) {
           const p = pts[i], ch = p.close - f0;
           lab.textContent = fmtDate(p.date);
           pr.innerHTML = bigMoney(p.close, ccy);
-          sb.innerHTML = `<span class="${tone(ch)}">${ch >= 0 ? '▲' : '▼'} ${fmtSignedMoney(ch, ccy)} (${fmtPct((ch / f0) * 100)})</span> <span class="muted">since ${fmtDate(pts[0].date, { month: 'short', day: 'numeric' })}</span>`;
+          sb.innerHTML = `<span class="${tone(ch)}">${ch >= 0 ? '▲' : '▼'} ${fmtSignedMoney(ch, ccy)} (${fmtPct((ch / f0) * 100)})</span> <span class="muted">since ${fmtDate(pts[0].date, days && days <= 365 ? { month: 'short', day: 'numeric' } : undefined)}</span>`;
         },
         onEnd: () => { lab.textContent = restHtml.lab; pr.innerHTML = restHtml.pr; sb.innerHTML = restHtml.sb; },
       });
     };
-    $$('[name=ad-range]', body).forEach((r) => (r.onchange = () => { range = r.value; draw(); }));
-    if (a.source === 'none') { box.innerHTML = '<p class="muted small chart-empty">No price history for this listing.</p>'; return; }
-    market.getSeries(a).then((s) => { series = s; draw(); })
-      .catch((e) => { box.innerHTML = `<p class="muted small chart-empty">${esc(e.message)}</p>`; });
+    const load = (r) => {
+      const key = sourceFor(r);
+      if (series[key]) return draw();
+      box.innerHTML = '<div class="skeleton" style="height:200px"></div>';
+      (key === '1y' ? market.getSeries(a) : market.getLongSeries(a, key))
+        .then((pts) => { series[key] = pts; if (sourceFor(range) === key) draw(); })
+        .catch((e) => { if (sourceFor(range) === key) box.innerHTML = `<p class="muted small chart-empty">${esc(e.message)}</p>`; });
+    };
+    $$('[name=ad-range]', body).forEach((r) => (r.onchange = () => { range = r.value; load(range); }));
+    if (a.source === 'none' && !a.histSymbol) { box.innerHTML = '<p class="muted small chart-empty">No price history for this listing.</p>'; return; }
+    load(range);
   });
 }
 
@@ -1061,6 +1207,16 @@ function newPlan() {
 
 const currentPlan = () => store.state.plans.find((p) => p.id === ui.planId) || store.state.plans[0];
 
+// Target prices are in each asset's own currency (as on Markets) and default to the all-time high
+const nativePrice = (id) => market.quote(id)?.price ?? assetById(id)?.lastPrice ?? null;
+const athNative = (id) => (market.ath(id)?.partial ? null : market.ath(id)?.ath ?? null);
+const planMarkets = (plan) => [...new Set(plan.allocations.map((al) => marketOf(assetById(al.assetId))).filter(Boolean))];
+const summarizePlan = (plan) => planSummary(plan, priceOf, {
+  markets: planMarkets(plan),
+  targetOf: (id, al) => ({ price: nativePrice(id), target: al.target ?? athNative(id) }),
+});
+const inputNum = (n) => (n == null || !isFinite(n) ? '' : String(Number(n.toPrecision(7))));
+
 function renderPlan(el) {
   const plan = currentPlan();
   if (!plan) {
@@ -1070,8 +1226,6 @@ function renderPlan(el) {
     return;
   }
   ui.planId = plan.id;
-  const used = new Set(plan.allocations.map((a) => a.assetId));
-  const free = store.state.assets.filter((a) => !used.has(a.id));
 
   el.innerHTML = `
     <div class="toolbar">
@@ -1105,18 +1259,32 @@ function renderPlan(el) {
         <div class="alloc">
           <div id="plan-donut"></div>
           <div class="alloc-rows">
-            ${plan.allocations.map((al, i) => `
+            ${plan.allocations.map((al, i) => {
+              const a = assetById(al.assetId);
+              return `
               <div class="alloc-row" data-i="${i}">
-                <span class="dot" style="background:${assetColor(al.assetId)}"></span>
-                <label class="sr-only" for="al-a-${i}">Asset</label>
-                <select id="al-a-${i}" name="al-asset">${assetOptions(al.assetId, store.state.assets.filter((a) => a.id === al.assetId || !used.has(a.id)))}</select>
-                <label class="sr-only" for="al-p-${i}">Percent</label>
-                <div class="pct-input"><input id="al-p-${i}" name="al-pct" type="number" inputmode="decimal" min="0" max="100" step="any" value="${al.pct}"><span>%</span></div>
-                <button class="icon-btn" type="button" data-act="del-alloc" aria-label="Remove from pie">${icon('x', 18)}</button>
-              </div>`).join('')}
+                <div class="alloc-main">
+                  <span class="dot" style="background:${al.assetId ? assetColor(al.assetId) : 'var(--border)'}"></span>
+                  <div class="combo">
+                    <label class="sr-only" for="al-q-${i}">Instrument</label>
+                    <input id="al-q-${i}" name="al-q" class="combo-input" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="al-list-${i}" autocomplete="off" spellcheck="false" placeholder="Search name or ticker" value="${a ? esc(`${a.name} (${a.symbol})`) : ''}">
+                    <input type="hidden" name="al-asset" value="${esc(al.assetId || '')}">
+                    <ul class="combo-list" id="al-list-${i}" role="listbox" hidden></ul>
+                  </div>
+                  <label class="sr-only" for="al-p-${i}">Percent</label>
+                  <div class="pct-input"><input id="al-p-${i}" name="al-pct" type="number" inputmode="decimal" min="0" max="100" step="any" value="${al.pct}"><span>%</span></div>
+                  <button class="icon-btn" type="button" data-act="del-alloc" aria-label="Remove from plan">${icon('x', 18)}</button>
+                </div>
+                <div class="alloc-target">
+                  <label for="al-t-${i}">Target</label>
+                  <div class="ccy-input"><input id="al-t-${i}" name="al-target" type="number" inputmode="decimal" min="0" step="any" placeholder="ATH" value="${inputNum(al.target ?? athNative(al.assetId))}" data-default="${inputNum(athNative(al.assetId))}"><span>${esc(a?.currency || 'USD')}</span></div>
+                  <span class="alloc-up small" id="al-up-${i}"></span>
+                </div>
+              </div>`;
+            }).join('')}
             <p id="alloc-sum" class="small"></p>
             <div class="btn-row">
-              ${free.length ? `<button class="btn small" type="button" data-act="add-alloc">${icon('plus', 16)}Add asset</button>` : ''}
+              <button class="btn small" type="button" data-act="add-alloc">${icon('plus', 16)}Add instrument</button>
               ${plan.allocations.length > 1 ? `<button class="btn small" type="button" data-act="even-split">Split evenly</button>` : ''}
             </div>
           </div>
@@ -1131,7 +1299,17 @@ function renderPlan(el) {
   form.addEventListener('input', () => savePlanForm(form));
   form.addEventListener('change', (e) => {
     savePlanForm(form);
-    if (e.target.name === 'mode' || e.target.name === 'al-asset') render();
+    if (e.target.name === 'mode') render();
+  });
+  $$('.alloc-row', form).forEach((row) => {
+    const i = +row.dataset.i;
+    bindCombo($('[name=al-q]', row), {
+      exclude: () => new Set(currentPlan().allocations.filter((_, k) => k !== i).map((al) => al.assetId)),
+      onPick: (id) => {
+        editAlloc((p) => { p.allocations[i] = { ...p.allocations[i], assetId: id, target: null }; });
+        $(`#al-p-${i}`)?.focus();
+      },
+    });
   });
   updatePlanResults();
 }
@@ -1140,6 +1318,11 @@ function savePlanForm(form) {
   const plan = currentPlan();
   const assetsSel = $$('[name=al-asset]', form).map((s) => s.value);
   const pcts = $$('[name=al-pct]', form).map((i) => parseFloat(i.value) || 0);
+  // A target equal to the ATH isn't stored, so it keeps following the ATH
+  const targets = $$('[name=al-target]', form).map((i) => {
+    const v = parseFloat(i.value);
+    return v > 0 && i.value !== i.dataset.default ? v : null;
+  });
   store.update((s) => {
     const p = s.plans.find((x) => x.id === plan.id);
     p.name = form.name.value.trim() || 'Untitled plan';
@@ -1150,7 +1333,7 @@ function savePlanForm(form) {
     p.durationUnit = form.durationUnit.value;
     p.frequency = form.frequency.value;
     p.startDate = form.startDate.value || todayISO();
-    p.allocations = assetsSel.map((assetId, i) => ({ assetId, pct: pcts[i] }));
+    p.allocations = assetsSel.map((assetId, i) => ({ assetId, pct: pcts[i], target: targets[i] }));
   }, { silent: true });
   updatePlanResults();
 }
@@ -1159,15 +1342,32 @@ function updatePlanResults() {
   const plan = currentPlan();
   const res = $('#plan-results');
   if (!plan || !res) return;
-  const s = planSummary(plan, priceOf);
+  const s = summarizePlan(plan);
   const off = Math.abs(s.allocated - 100) > 0.01;
+  const unpicked = plan.allocations.some((al) => !al.assetId);
 
   const sumEl = $('#alloc-sum');
   if (sumEl) {
-    sumEl.className = `small ${off ? 'warn' : 'ok'}`;
-    sumEl.innerHTML = off ? `${icon('alert', 16)} Total ${fmtNum(s.allocated, 2)}%. Adjust to 100%.` : `${icon('check', 16)} Total 100%`;
+    sumEl.className = `small ${off || unpicked ? 'warn' : 'ok'}`;
+    sumEl.innerHTML = off ? `${icon('alert', 16)} Total ${fmtNum(s.allocated, 2)}%. Adjust to 100%.`
+      : unpicked ? `${icon('alert', 16)} Pick an instrument for every row.` : `${icon('check', 16)} Total 100%`;
   }
-  const segs = plan.allocations.map((al) => ({ label: assetName(al.assetId), value: +al.pct || 0, color: assetColor(al.assetId) }));
+  // Target fields follow the ATH until you type your own; upside under each one
+  $$('.alloc-row').forEach((row) => {
+    const i = +row.dataset.i, al = plan.allocations[i], r = s.allocations[i];
+    if (!al || !r) return;
+    const inp = $('[name=al-target]', row), up = $('.alloc-up', row);
+    const ath = athNative(al.assetId);
+    inp.dataset.default = inputNum(ath);
+    if (al.target == null && document.activeElement !== inp) inp.value = inputNum(ath);
+    const ccy = assetById(al.assetId)?.currency || 'USD';
+    const now = nativePrice(al.assetId);
+    up.innerHTML = !al.assetId ? ''
+      : r.upside == null ? `<span class="muted">${now == null ? 'Waiting for price' : 'Enter a target price'}</span>`
+      : `<span class="num ${tone(r.upside)}">${fmtPct(r.upside)}</span> <span class="muted num">from ${fmtMoney(now, ccy)}</span>${al.target != null && ath
+        ? ` · <button type="button" class="link-btn muted" data-act="target-ath" data-i="${i}">Use ATH</button>` : al.target == null ? ' <span class="muted">· ATH</span>' : ''}`;
+  });
+  const segs = plan.allocations.map((al) => ({ label: assetName(al.assetId), value: +al.pct || 0, color: al.assetId ? assetColor(al.assetId) : 'var(--border)' }));
   if (off && s.allocated < 100) segs.push({ label: 'Unallocated', value: 100 - s.allocated, color: 'var(--border)' });
   const d = $('#plan-donut');
   if (d) d.innerHTML = donut(segs, { label: 'Plan allocation', center: s.perBuy ? money(s.perBuy) : '' });
@@ -1177,20 +1377,32 @@ function updatePlanResults() {
     $('#plan-schedule').innerHTML = '';
     return;
   }
+  const mk = planMarkets(plan).filter((m) => m !== 'FX').map((m) => MARKET_NAMES[m]);
   res.innerHTML = `
-    <h2>Result</h2>
-    <div class="kpis">
-      <div class="kpi"><span class="label">Number of buys</span><strong class="num">${s.n}</strong><span class="small muted">${FREQS[plan.frequency].toLowerCase()}</span></div>
-      <div class="kpi"><span class="label">Each buy</span><strong class="num">${money(s.perBuy)}</strong></div>
-      <div class="kpi"><span class="label">Total invested</span><strong class="num">${money(s.total)}</strong></div>
-      <div class="kpi"><span class="label">Last buy</span><strong class="num">${fmtDate(s.end)}</strong></div>
+    <div class="plan-hero">
+      <div class="plan-gain">
+        <span class="eyebrow">Potential gain at your targets</span>
+        <strong class="hero num ${tone(s.gain)}">${s.gain != null ? smoney(s.gain) : '-'}</strong>
+        <span class="small num">${s.gain != null ? `<span class="${tone(s.gain)}">${fmtPct(s.gainPct)}</span> <span class="muted">· worth ${money(s.atTarget)} on ${money(s.total)} invested</span>` : '<span class="muted">Add target prices to see it</span>'}</span>
+      </div>
+      <div class="kpis">
+        <div class="kpi"><span class="label">Buys</span><strong class="num">${s.n}</strong><span class="small muted">${FREQS[plan.frequency].toLowerCase()}</span></div>
+        <div class="kpi"><span class="label">Each buy</span><strong class="num">${money(s.perBuy)}</strong></div>
+        <div class="kpi"><span class="label">Total invested</span><strong class="num">${money(s.total)}</strong></div>
+        <div class="kpi"><span class="label">Last buy</span><strong class="num">${fmtDate(s.end)}</strong></div>
+      </div>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Asset</th><th class="r">Share</th><th class="r">Per buy</th><th class="r">Over plan</th><th class="r">Units now</th></tr></thead>
-      <tbody>${s.allocations.map((a) => `<tr><td><span class="dot" style="background:${assetColor(a.assetId)}"></span>${esc(assetName(a.assetId))}</td>
+      <thead><tr><th>Asset</th><th class="r">Share</th><th class="r">Per buy</th><th class="r">Over plan</th><th class="r">Units now</th><th class="r">Target</th><th class="r">Upside</th><th class="r">At target</th><th class="r">Gain</th></tr></thead>
+      <tbody>${s.allocations.map((a) => `<tr><td><span class="dot" style="background:${a.assetId ? assetColor(a.assetId) : 'var(--border)'}"></span>${esc(assetName(a.assetId))}</td>
         <td class="r num">${fmtPct(+a.pct || 0, { signed: false, digits: 1 })}</td><td class="r num">${money(a.amount)}</td><td class="r num">${money(a.total)}</td>
-        <td class="r num">${a.units != null ? fmtNum(a.units, 6) : '-'}</td></tr>`).join('')}</tbody>
-    </table></div>`;
+        <td class="r num">${a.units != null ? fmtNum(a.units, 6) : '-'}</td>
+        <td class="r num">${a.target != null ? fmtMoney(a.target, assetById(a.assetId)?.currency || 'USD') : '-'}</td>
+        <td class="r num ${tone(a.upside)}">${fmtPct(a.upside, { digits: 1 })}</td>
+        <td class="r num">${money(a.atTarget)}</td>
+        <td class="r num ${tone(a.gain)}">${a.gain != null ? smoney(a.gain) : '-'}</td></tr>`).join('')}</tbody>
+    </table></div>
+    <p class="footnote">Gains assume every buy fills at today's price and each asset then reaches its target. ${s.missingTargets ? `${s.missingTargets} asset${s.missingTargets === 1 ? ' has' : 's have'} no target yet and ${s.missingTargets === 1 ? 'is' : 'are'} left out. ` : ''}Buys fall on trading days only: weekends${mk.length ? ` and ${mk.join(', ')} holidays` : ''} are skipped.</p>`;
 
   const done = new Set(plan.executed || []);
   const today = todayISO();
@@ -1207,7 +1419,8 @@ function updatePlanResults() {
 
 function logPlanBuy(date) {
   const plan = currentPlan();
-  const s = planSummary(plan, priceOf);
+  const s = summarizePlan(plan);
+  if (plan.allocations.some((al) => !al.assetId)) return toast('Pick an instrument for every row first.', { kind: 'error' });
   const missing = s.allocations.filter((a) => a.amount > 0 && !a.price);
   if (missing.length) return toast(`No current price for ${missing.map((a) => assetName(a.assetId)).join(', ')}. Refresh prices first.`, { kind: 'error' });
   const txs = s.allocations.filter((a) => a.amount > 0).map((a) => ({
@@ -1272,8 +1485,8 @@ function appData() {
       },
     },
     plans: state.plans.map((p) => {
-      const s = planSummary(p, priceOf);
-      return { name: p.name, mode: p.mode === 'total' ? 'spread total capital' : 'fixed amount per buy', frequency: p.frequency, firstBuy: p.startDate, lastBuy: s.end, buys: s.n, perBuy: round(s.perBuy), total: round(s.total), buysLogged: (p.executed || []).length, allocation: p.allocations.map((a) => ({ asset: assetName(a.assetId), pct: a.pct })) };
+      const s = summarizePlan(p);
+      return { name: p.name, mode: p.mode === 'total' ? 'spread total capital' : 'fixed amount per buy', frequency: p.frequency, firstBuy: p.startDate, lastBuy: s.end, buys: s.n, perBuy: round(s.perBuy), total: round(s.total), buysLogged: (p.executed || []).length, potentialGainAtTargets: s.gain != null ? round(s.gain) : null, allocation: s.allocations.map((a) => ({ asset: assetName(a.assetId), pct: a.pct, targetPrice: a.target, upsidePct: a.upside != null ? round(a.upside) : null })) };
     }),
   };
 }
@@ -1593,11 +1806,11 @@ const ACTIONS = {
     ui.planId = null;
     toast(`${plan.name} deleted`, { action: 'Undo', onAction: () => { store.update((s) => s.plans.splice(idx, 0, plan)); ui.planId = plan.id; render(); } });
   },
-  'add-alloc': () => editAlloc((p) => {
-    const used = new Set(p.allocations.map((a) => a.assetId));
-    const next = store.state.assets.find((a) => !used.has(a.id));
-    if (next) p.allocations.push({ assetId: next.id, pct: Math.max(0, 100 - p.allocations.reduce((s, a) => s + (+a.pct || 0), 0)) });
-  }),
+  'add-alloc': () => {
+    editAlloc((p) => p.allocations.push({ assetId: '', pct: round(Math.max(0, 100 - p.allocations.reduce((s, a) => s + (+a.pct || 0), 0))) }));
+    $$('[name=al-q]').pop()?.focus();
+  },
+  'target-ath': (_, btn) => editAlloc((p) => { p.allocations[+btn.dataset.i].target = null; }),
   'del-alloc': (_, btn) => editAlloc((p) => p.allocations.splice(+btn.closest('[data-i]').dataset.i, 1)),
   'even-split': () => editAlloc((p) => {
     const n = p.allocations.length;

@@ -8,7 +8,7 @@ No build step: plain HTML, CSS and ES modules. Host the folder on GitHub Pages (
 
 - **Markets**: price, day change, all-time high and the gain needed to get back there: `(ATH / price - 1) x 100`.
 - **Portfolio**: buys and sells, average cost, market value, unrealized and realized P/L, value if everything returned to its ATH, allocation donut, and a daily performance chart (value vs invested).
-- **Plan**: either spread a total amount over a period, or invest a fixed amount X per buy. Choose the duration, frequency and start date, then split each buy across assets with a pie. Shows the full schedule; "Log buys" records the buys in Portfolio.
+- **Plan**: either spread a total amount over a period, or invest a fixed amount X per buy. Choose the duration, frequency and start date, then split each buy across assets with a pie. Find instruments by name or ticker (your assets, any Yahoo listing or CoinGecko coin). Each asset has a target price (defaults to its ATH) and the plan shows the potential gain if every target is reached. Buys land on trading days only (weekends and US, Xetra, Euronext, London, Toronto holidays). Shows the full schedule; "Log buys" records the buys in Portfolio.
 - **AI**: analyse an asset (trend, momentum, RSI, SMAs and volatility from 200 days of data, sentiment, plus news via web search on Claude and ChatGPT), review your portfolio or a plan, or chat about anything. The model sees your app data, so it can do calculations the app doesn't have yet.
 - **Settings**: API keys, models, cloud sync, export and import.
 

@@ -46,7 +46,53 @@ function loadSettings() {
   s.settingsVersion = 2;
   return { ...DEFAULT_SETTINGS, ...s, keys: { ...DEFAULT_SETTINGS.keys, ...s.keys }, models: { ...DEFAULT_SETTINGS.models, ...s.models } };
 }
-const normalize = (s) => ({ ...defaultState(), ...(s || {}) });
+// The listing an asset is priced from; two assets with the same key (or ISIN) are the same instrument
+export function priceKey(a) {
+  if (a.source === 'coingecko') return a.cgId ? `cg:${a.cgId}` : null;
+  if (a.source === 'twelve') return a.symbol ? `td:${a.symbol.toUpperCase()}` : null;
+  if (a.source === 'yahoo') return a.yahoo ? `y:${a.yahoo.toUpperCase()}` : null;
+  return null;
+}
+export const sameInstrument = (a, b) => (a.isin && a.isin === b.isin) || (priceKey(a) && priceKey(a) === priceKey(b));
+
+// Merges duplicate assets (e.g. one added by hand and the same one from a Trading 212 import).
+// The one with the most transactions is kept; transactions and plans move over to it.
+export function dedupeAssets(state) {
+  const count = new Map();
+  for (const t of state.transactions || []) count.set(t.assetId, (count.get(t.assetId) || 0) + 1);
+  const rank = (a) => (count.get(a.id) || 0) * 2 + (a.isin ? 1 : 0);
+  const keep = [], moved = new Map();
+  for (const a of state.assets || []) {
+    const k = keep.findIndex((x) => sameInstrument(x, a));
+    if (k < 0) { keep.push(a); continue; }
+    const [win, lose] = rank(a) > rank(keep[k]) ? [a, keep[k]] : [keep[k], a];
+    keep[k] = { ...lose, ...win, archived: !!(win.archived && lose.archived) };
+    moved.set(lose.id, win.id);
+  }
+  if (!moved.size) return false;
+  // Follow chains (a -> b -> c) so every reference lands on the final asset
+  const to = (id) => { while (moved.has(id)) id = moved.get(id); return id; };
+  state.assets = keep;
+  for (const t of state.transactions || []) t.assetId = to(t.assetId);
+  for (const f of state.cashflows || []) if (f.assetId) f.assetId = to(f.assetId);
+  for (const p of state.plans || []) {
+    const merged = [];
+    for (const al of p.allocations || []) {
+      const id = to(al.assetId);
+      const prev = merged.find((x) => x.assetId === id);
+      if (prev) prev.pct = (+prev.pct || 0) + (+al.pct || 0);
+      else merged.push({ ...al, assetId: id });
+    }
+    p.allocations = merged;
+  }
+  return true;
+}
+
+const normalize = (s) => {
+  const st = { ...defaultState(), ...(s || {}) };
+  dedupeAssets(st);
+  return st;
+};
 
 const listeners = new Set();
 
@@ -61,6 +107,7 @@ export const store = {
   // silent: persist + sync without re-rendering (used while the user is typing in a form)
   update(mutator, { silent = false } = {}) {
     mutator(this.state);
+    dedupeAssets(this.state);
     this.state.updatedAt = Date.now();
     write(STATE_KEY, this.state);
     schedulePush();

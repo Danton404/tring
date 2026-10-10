@@ -265,6 +265,17 @@ export async function refreshAll(assets, { force = false, onUpdate, base = 'USD'
   await Promise.allSettled(jobs);
 }
 
+// Yahoo symbol for an asset's price history
+export function historySymbol(a) {
+  if (a.yahoo) return a.yahoo;
+  if (a.histSymbol) return a.histSymbol;
+  if (a.source === 'coingecko') return `${a.symbol}-USD`;
+  if (a.source === 'twelve') return a.symbol === 'XAU/USD' ? 'GC=F' : a.symbol.replace('/', '') + (a.symbol.includes('/') ? '=X' : '');
+  return null;
+}
+
+const toPoints = (pts) => pts.filter((x) => x.close).map((x) => ({ date: new Date(x.t * 1000).toISOString().slice(0, 10), close: x.close }));
+
 // Daily closes, oldest first: [{ date, close }]
 export async function getSeries(asset, days = 365) {
   const hit = cache.series[asset.id];
@@ -275,7 +286,7 @@ export async function getSeries(asset, days = 365) {
     points = (d.prices || []).map(([t, p]) => ({ date: new Date(t).toISOString().slice(0, 10), close: p }));
   } else if (asset.source === 'yahoo' || asset.histSymbol) {
     const { points: p } = await yahooChart(asset.yahoo || asset.histSymbol, '1y', '1d');
-    points = p.filter((x) => x.close).map((x) => ({ date: new Date(x.t * 1000).toISOString().slice(0, 10), close: x.close })).slice(-days);
+    points = toPoints(p).slice(-days);
   } else if (asset.source === 'twelve') {
     const d = await twelve('time_series', { symbol: asset.symbol, interval: '1day', outputsize: days });
     points = (d.values || []).map((v) => ({ date: v.datetime.slice(0, 10), close: +v.close })).reverse();
@@ -283,6 +294,82 @@ export async function getSeries(asset, days = 365) {
   cache.series[asset.id] = { points, ts: Date.now() };
   persist();
   return points;
+}
+
+// Longer history for the detail chart: '5y' (daily) or 'max' (weekly). Kept in memory only, it's large.
+const longMemo = new Map();
+export function getLongSeries(asset, range) {
+  const k = `${asset.id}:${range}`;
+  if (!longMemo.has(k)) {
+    const p = fetchLong(asset, range);
+    longMemo.set(k, p);
+    p.catch(() => longMemo.delete(k));
+  }
+  return longMemo.get(k);
+}
+async function fetchLong(asset, range) {
+  const sym = historySymbol(asset);
+  if (hosted && sym) {
+    const { meta, points } = await yahooChart(sym, range, range === 'max' ? '1wk' : '1d');
+    const pence = meta.currency === 'GBp' || meta.currency === 'GBX';
+    return toPoints(points).map((p) => (pence ? { ...p, close: p.close / 100 } : p));
+  }
+  if (asset.source === 'twelve') {
+    const d = await twelve('time_series', { symbol: asset.symbol, interval: '1day', outputsize: 5000 });
+    const pts = (d.values || []).map((v) => ({ date: v.datetime.slice(0, 10), close: +v.close })).reverse();
+    return range === '5y' ? pts.slice(-1265) : pts;
+  }
+  if (asset.source === 'coingecko') {
+    // The free CoinGecko API may refuse more than a year; fall back to what it allows
+    const d = await gecko(`coins/${asset.cgId}/market_chart`, { vs_currency: 'usd', days: range === '5y' ? 1826 : 'max', interval: 'daily' }).catch(() => null);
+    if (d) return (d.prices || []).map(([t, p]) => ({ date: new Date(t).toISOString().slice(0, 10), close: p }));
+  }
+  return getSeries(asset, 365);
+}
+
+// ---------- Instrument search (by name or ticker)
+
+const YAHOO_KINDS = { EQUITY: 'stock', ETF: 'etf', INDEX: 'index', FUTURE: 'commodity', CURRENCY: 'fx', MUTUALFUND: 'etf' };
+
+// [{ key, name, symbol, kind, where, pick }]; pick() resolves to a new asset object (no id yet)
+export async function searchInstruments(q) {
+  q = q.trim();
+  if (q.length < 2) return [];
+  const jobs = [
+    searchCrypto(q).then((coins) => coins.slice(0, 3).map((c) => ({
+      key: `cg:${c.id}`, name: c.name, symbol: c.symbol.toUpperCase(), kind: 'crypto', where: 'Crypto',
+      pick: async () => ({ name: c.name, symbol: c.symbol.toUpperCase(), kind: 'crypto', source: 'coingecko', cgId: c.id }),
+    }))).catch(() => []),
+  ];
+  if (hosted) {
+    jobs.push(yahoo('yahoo_search', { q }).then(({ quotes = [] }) => quotes
+      .filter((x) => YAHOO_KINDS[x.type] && x.symbol)
+      .slice(0, 8)
+      .map((x) => {
+        const kind = YAHOO_KINDS[x.type];
+        const us = US_EXCHANGES.has(x.exchange) && !/[.=^]/.test(x.symbol) && (kind === 'stock' || kind === 'etf');
+        return {
+          key: us ? `td:${x.symbol}` : `y:${x.symbol}`, name: x.name || x.symbol, symbol: x.symbol, kind, where: x.exch || x.exchange || '',
+          pick: async () => {
+            if (us) return { name: x.name || x.symbol, symbol: x.symbol, kind, source: 'twelve', currency: 'USD' };
+            const { meta } = await yahooChart(x.symbol, '5d', '1d');
+            if (!/^[A-Z]{3}$/.test(meta.currency || '')) throw new Error(`${x.symbol} is quoted in ${meta.currency || 'an unknown currency'}. Pick another listing.`);
+            return { name: x.name || x.symbol, symbol: x.symbol, kind, source: 'yahoo', yahoo: x.symbol, currency: meta.currency };
+          },
+        };
+      })).catch(() => []));
+  } else if (store.settings.twelveKey) {
+    jobs.push(twelve('symbol_search', { symbol: q, outputsize: 10 }).then((d) => (d.data || [])
+      .filter((x) => x.country === 'United States')
+      .slice(0, 6)
+      .map((x) => ({
+        key: `td:${x.symbol}`, name: x.instrument_name, symbol: x.symbol, kind: /etf/i.test(x.instrument_type) ? 'etf' : 'stock', where: x.exchange,
+        pick: async () => ({ name: x.instrument_name, symbol: x.symbol, kind: /etf/i.test(x.instrument_type) ? 'etf' : 'stock', source: 'twelve' }),
+      }))).catch(() => []));
+  }
+  const [crypto, rest = []] = await Promise.all(jobs);
+  // Listings first (Yahoo ranks them by relevance), then coins
+  return [...rest, ...crypto];
 }
 
 export function forget(id) {

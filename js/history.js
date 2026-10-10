@@ -14,14 +14,9 @@ function at(series, date) {
   return best;
 }
 
-// Yahoo symbol for an asset's price history
-export function historySymbol(a) {
-  if (a.yahoo) return a.yahoo;
-  if (a.histSymbol) return a.histSymbol;
-  if (a.source === 'coingecko') return `${a.symbol}-USD`;
-  if (a.source === 'twelve') return a.symbol === 'XAU/USD' ? 'GC=F' : a.symbol.replace('/', '') + (a.symbol.includes('/') ? '=X' : '');
-  return null;
-}
+// Yahoo symbol for an asset's price history (lives in market.js; re-exported for existing imports)
+export { historySymbol } from './market.js';
+import { historySymbol } from './market.js';
 
 let memo = { key: null, promise: null };
 const CACHE_KEY = 'tring.history.v1';
